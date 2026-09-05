@@ -18,9 +18,12 @@ sumber yang ter-install di `Lib/site-packages/google/adk/` pada venv ini
 > Ditambah lewat run 104-kasus `test_agent_cases.py`: instruksi dinamis
 > (`InstructionProvider`), retry sekali untuk panggilan embedding Ollama,
 > kanari ukuran sesi, loop verifikasi akurasi hybrid (`verify_and_revise()`,
-> dipilih lewat benchmark nyata di `benchmark_verify_loop.py`), dan 4 bug
-> nyata ditemukan+diperbaiki di `query.py` (lihat `rag-setup-windows.md`
-> Known Issues). Graph Bagian 1 & 2 sudah dikonfirmasi (lihat bagian 5) --
+> dipilih lewat benchmark nyata di `benchmark_verify_loop.py`), dan 5 bug
+> nyata ditemukan+diperbaiki di `query.py` (4 dari 104-kasus regresi, 1
+> lagi ditemukan belakangan lewat testing interaktif pengguna: framing
+> "buatkan rekomendasi promo" bikin model menjawab tanpa panggil tool sama
+> sekali -- lihat `rag-setup-windows.md` Known Issues). Graph Bagian 1 & 2
+> sudah dikonfirmasi (lihat bagian 5) --
 > Bagian 2 langsung diimplementasikan, Bagian 1 (migrasi struktur ke
 > `AgentTool` + spesialis) masih menunggu spec tertulis + implementasi
 > terpisah.
