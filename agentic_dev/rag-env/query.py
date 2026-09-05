@@ -170,11 +170,43 @@ async def search_catalog(query: str, category: str = "", max_price: float = 0) -
     return await asyncio.to_thread(_search_catalog_impl, query, category, max_price)
 
 
-def _get_top_sellers_impl(segment: str, top_n: int) -> str:
+def _filter_by_date(df: pd.DataFrame, start_date: str, end_date: str) -> tuple[pd.DataFrame, str]:
+    """Filter df berdasarkan rentang tanggal transaction_time (inklusif di
+    kedua ujung). start_date/end_date kosong berarti tanpa batas di sisi
+    itu -- default tanpa filter sama sekali kalau keduanya kosong (lihat
+    2026-09-06-transaction-data-v2-design.md bagian 3a). Mengembalikan
+    (df_terfilter, pesan_error) -- pesan_error non-kosong kalau formatnya
+    salah atau rentangnya di luar data yang tersedia, supaya tool bisa
+    menolak jujur alih-alih mengarang dari df kosong."""
+    if not start_date and not end_date:
+        return df, ""
+    available_min = df["transaction_time"].dt.date.min()
+    available_max = df["transaction_time"].dt.date.max()
+    try:
+        start = pd.Timestamp(start_date).date() if start_date else available_min
+        end = pd.Timestamp(end_date).date() if end_date else available_max
+    except ValueError:
+        return df.iloc[0:0], (
+            f"Format tanggal tidak valid (pakai YYYY-MM-DD): start_date='{start_date}' end_date='{end_date}'."
+        )
+    if start > available_max or end < available_min:
+        return df.iloc[0:0], (
+            f"Tidak ada data untuk rentang {start_date or available_min} s.d. {end_date or available_max} -- "
+            f"data yang tersedia cuma {available_min} s.d. {available_max}."
+        )
+    mask = (df["transaction_time"].dt.date >= start) & (df["transaction_time"].dt.date <= end)
+    return df[mask], ""
+
+
+def _get_top_sellers_impl(segment: str, top_n: int, start_date: str, end_date: str) -> str:
     if not segment.strip():
         return "Segmen kosong, tidak bisa mencari produk terlaris."
 
     df = _load_transactions()
+    df, date_error = _filter_by_date(df, start_date, end_date)
+    if date_error:
+        return date_error
+
     mask = df["product_name"].str.contains(segment, case=False, na=False) | df[
         "product_category_name_lvl_0"
     ].str.contains(segment, case=False, na=False)
@@ -186,7 +218,7 @@ def _get_top_sellers_impl(segment: str, top_n: int) -> str:
     top = (
         filtered.groupby("product_name")
         .agg(
-            terjual=("product_name", "count"),
+            terjual=("item_qty", "sum"),
             harga=("product_price", "first"),
             kategori=("product_category_name_lvl_0", "first"),
         )
@@ -194,23 +226,30 @@ def _get_top_sellers_impl(segment: str, top_n: int) -> str:
         .head(top_n)
     )
     return "\n".join(
-        f"- {name} | kategori: {row.kategori} | terjual: {row.terjual}x | harga: {row.harga:.0f}"
+        f"- {name} | kategori: {row.kategori} | terjual: {row.terjual:.0f}x | harga: {row.harga:.0f}"
         for name, row in top.iterrows()
     )
 
 
-async def get_top_sellers(segment: str, top_n: int = 5) -> str:
+async def get_top_sellers(
+    segment: str, top_n: int = 5, start_date: str = "", end_date: str = ""
+) -> str:
     """
-    Cari produk terlaris berdasarkan data transaksi mentah, difilter menurut segmen.
+    Find best-selling products from raw transaction data, filtered by segment.
 
     Args:
-      segment: Kata kunci segmen/kategori produk, misalnya "sabun mandi" atau "minuman".
-      top_n: Jumlah produk terlaris yang ingin ditampilkan.
+      segment: Product/category keyword to filter by, e.g. "sabun mandi" or "minuman".
+      top_n: Number of top-selling products to return.
+      start_date: Optional start date (YYYY-MM-DD), inclusive. Empty ("") means no
+        lower bound -- use every available date.
+      end_date: Optional end date (YYYY-MM-DD), inclusive. Empty ("") means no upper
+        bound -- use every available date.
 
     Returns:
-      str: Daftar produk terlaris beserta kategori, jumlah kali terjual, dan harga, satu produk per baris.
+      str: List of best-selling products with category, net units sold (returns
+        subtracted), and price, one per line.
     """
-    return await asyncio.to_thread(_get_top_sellers_impl, segment, top_n)
+    return await asyncio.to_thread(_get_top_sellers_impl, segment, top_n, start_date, end_date)
 
 
 def _find_cross_sell_candidates_impl(product_name: str, top_k: int) -> str:
@@ -249,33 +288,41 @@ async def find_cross_sell_candidates(product_name: str, top_k: int = 5) -> str:
     return await asyncio.to_thread(_find_cross_sell_candidates_impl, product_name, top_k)
 
 
-def _get_top_categories_impl(top_n: int, terendah: bool) -> str:
+def _get_top_categories_impl(top_n: int, terendah: bool, start_date: str, end_date: str) -> str:
     df = _load_transactions()
-    counts = df["product_category_name_lvl_0"].value_counts()
-    top = counts.sort_values(ascending=True).head(top_n) if terendah else counts.head(top_n)
+    df, date_error = _filter_by_date(df, start_date, end_date)
+    if date_error:
+        return date_error
+
+    counts = df.groupby("product_category_name_lvl_0")["item_qty"].sum()
+    top = counts.sort_values(ascending=terendah).head(top_n)
 
     if top.empty:
         return "Tidak ada data kategori."
 
-    return "\n".join(f"- {cat} | terjual: {count}x" for cat, count in top.items())
+    return "\n".join(f"- {cat} | terjual: {count:.0f}x" for cat, count in top.items())
 
 
-async def get_top_categories(top_n: int = 5, terendah: bool = False) -> str:
+async def get_top_categories(
+    top_n: int = 5, terendah: bool = False, start_date: str = "", end_date: str = ""
+) -> str:
     """
-    Cari kategori produk dengan jumlah penjualan tertinggi (atau terendah) dari seluruh
-    data transaksi mentah. Pakai tool ini kalau pertanyaannya soal kategori secara umum
-    (bukan segmen atau produk spesifik), misalnya "kategori apa yang paling laris" atau
-    "kategori mana yang penjualannya paling sedikit".
+    Find product categories with the highest (or lowest) net units sold from raw
+    transaction data.
 
     Args:
-      top_n: Jumlah kategori yang ingin ditampilkan.
-      terendah: True untuk mengurutkan dari kategori berpenjualan paling sedikit,
-        False (default) untuk kategori terlaris.
+      top_n: Number of categories to return.
+      terendah: True to sort by lowest net units sold first, False (default) for
+        highest first.
+      start_date: Optional start date (YYYY-MM-DD), inclusive. Empty ("") means no
+        lower bound -- use every available date.
+      end_date: Optional end date (YYYY-MM-DD), inclusive. Empty ("") means no upper
+        bound -- use every available date.
 
     Returns:
-      str: Daftar kategori beserta jumlah transaksi, satu kategori per baris.
+      str: List of categories with net units sold, one per line.
     """
-    return await asyncio.to_thread(_get_top_categories_impl, top_n, terendah)
+    return await asyncio.to_thread(_get_top_categories_impl, top_n, terendah, start_date, end_date)
 
 
 def _get_worst_sellers_impl(segment: str, top_n: int) -> str:
