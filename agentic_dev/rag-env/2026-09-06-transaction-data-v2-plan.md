@@ -1264,11 +1264,11 @@ def _build_produk_instruction(context) -> str:
     )
 ```
 
-Update the `kategori_specialist = Agent(...)` construction: change `instruction=KATEGORI_INSTRUCTION` to `instruction=_build_kategori_instruction`, and add `get_trending_categories` to its `tools=[...]` list.
+Update the `kategori_specialist = Agent(...)` construction: change `instruction=KATEGORI_INSTRUCTION` to `instruction=_build_kategori_instruction`. Do NOT touch its `tools=[...]` list in this task -- Task 4 already added `get_trending_categories` there; by the time this task runs it should already be present. Make a small, targeted edit of just the `instruction=` line, not a wholesale replacement of the whole `Agent(...)` block (a stale full-block replacement would silently drop Task 3/4's tool registrations).
 
-Update the `root_agent = Agent(...)` construction: change `instruction=ROOT_INSTRUCTION` to `instruction=_build_root_instruction`.
+Update the `root_agent = Agent(...)` construction: change `instruction=ROOT_INSTRUCTION` to `instruction=_build_root_instruction`. Same caution: a targeted one-line edit, not a full-block replacement (root_agent's `tools=[]` is untouched by any task, but its `sub_agents=[...]`/callback wiring must survive this edit unchanged).
 
-Update the `produk_specialist = Agent(...)` construction: add `get_trending_products` and `get_peak_hours` to its `tools=[...]` list.
+`produk_specialist`'s `tools=[...]` list needs NO changes in this task -- Tasks 3 and 4 already added `get_peak_hours` and `get_trending_products` there. Confirm (don't just assume) both are already present before moving on; if either is missing, that's a signal a prior task's change didn't land and should be flagged rather than silently re-added here (re-adding risks a duplicate entry in the list).
 
 - [ ] **Step 4: Run it, confirm it passes**
 
