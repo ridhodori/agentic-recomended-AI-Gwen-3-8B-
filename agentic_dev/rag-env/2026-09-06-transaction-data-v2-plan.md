@@ -1238,7 +1238,10 @@ nothing.
 IMPORTANT: quote numbers (prices, units sold) EXACTLY as returned by the
 tool -- do not recompute or estimate from memory. If you need a number that
 isn't in any tool result yet, call the appropriate tool first -- never make
-one up."""
+one up.
+
+Always respond in Bahasa Indonesia (Indonesian), regardless of the language
+of these instructions."""
 ```
 
 Extend `_build_produk_instruction` to also append the date-range note:
