@@ -1,7 +1,8 @@
 """
-100 kasus uji untuk root_agent di query.py -- mencakup ketujuh tool
+Kasus uji untuk root_agent di query.py -- mencakup kesepuluh tool
 (search_catalog, get_top_sellers, find_cross_sell_candidates, get_top_categories,
-get_worst_sellers, get_category_assortment, get_price_range) plus kasus edge:
+get_worst_sellers, get_category_assortment, get_price_range, get_trending_products,
+get_trending_categories, get_peak_hours) plus kasus edge:
 pertanyaan bertema waktu/per-pelanggan yang HARUS ditolak (lihat PANDUAN_PENGGUNAAN.md
 dan rag-setup-windows.md), segmen di luar katalog, multi-turn, dan pertanyaan
 gabungan yang butuh beberapa tool sekaligus dalam satu giliran.
@@ -128,12 +129,33 @@ CASES = [
     ("PR09", "get_price_range", ["rentang harga kategori Elektronik"], ["get_price_range"], "kategori tidak ada di katalog, harus bilang tidak ada"),
     ("PR10", "get_price_range", ["berapa rentang harga produk kategori Perawatan & Pembersih Kain"], ["get_price_range"], ""),
 
-    # --- Edge cases: refusal bertema waktu (HARUS tidak pakai tool) (5) ---
+    # --- get_trending_products / get_trending_categories (naik daun) (5) ---
+    ("TR01", "get_trending_categories", ["kategori apa yang lagi tren sekarang"], ["get_trending_categories"], "dipindah dari EDW05 -- sekarang bisa dijawab lewat trending, bukan ditolak"),
+    ("TR02", "get_trending_categories", ["kategori mana yang lagi naik daun"], ["get_trending_categories"], ""),
+    ("TR03", "get_trending_products", ["produk sabun mandi apa yang lagi trending"], ["get_trending_products"], ""),
+    ("TR04", "get_trending_products", ["produk apa yang lagi hits di kategori minuman"], ["get_trending_products"], ""),
+    ("TR05", "get_trending_products", ["produk apa yang belakangan ini penjualannya naik"], ["get_trending_products"], ""),
+
+    # --- get_peak_hours (jam ramai) (3) ---
+    ("PH01", "get_peak_hours", ["jam berapa penjualan paling ramai"], ["get_peak_hours"], ""),
+    ("PH02", "get_peak_hours", ["jam berapa kategori minuman paling laris terjual"], ["get_peak_hours"], ""),
+    ("PH03", "get_peak_hours", ["waktu paling ramai untuk sabun mandi jam berapa"], ["get_peak_hours"], ""),
+
+    # --- Filter tanggal spesifik (start_date/end_date) (3) ---
+    ("DT01", "date_filter", ["penjualan tanggal 2 Agustus 2026 kategori apa yang paling laris"], ["get_top_categories"], "tanggal ada di data (2026-08-02), harus terjawab dengan filter tanggal"),
+    ("DT02", "date_filter", ["produk terlaris kategori Minuman tanggal 1 Agustus 2026"], ["get_top_sellers"], "tanggal ada di data (2026-08-01)"),
+    ("DT03", "date_filter", ["penjualan tanggal 25 Desember 2026 gimana"], ["get_top_categories"], "tanggal DI LUAR data yang tersedia -- tool tetap terpanggil tapi harus mengembalikan pesan jujur rentang tidak tersedia, bukan mengarang; baca jawabannya, jangan cuma cek nama tool"),
+
+    # --- Regresi drift-bahasa: segmen dengan padanan Inggris jelas (3) ---
+    ("LD01", "language_drift", ["produk terlaris kategori minuman"], ["get_top_sellers"], "'minuman'='drink' -- kalau argumen tool diam-diam diterjemahkan ke Inggris, hasilnya kosong; baca jawabannya, harus berisi produk nyata bukan 'tidak ada produk yang cocok'"),
+    ("LD02", "language_drift", ["kategori makanan penjualannya berapa"], ["get_top_categories"], "'makanan'='food' -- cek jawaban bukan penolakan kosong"),
+    ("LD03", "language_drift", ["cari susu cair rendah lemak yang lagi trending"], ["get_trending_products"], "'susu'='milk' -- cek jawaban bukan penolakan kosong"),
+
+    # --- Edge cases: refusal bertema waktu (HARUS tidak pakai tool) (4) ---
     ("EDW01", "edge_waktu", ["penjualan minggu ini gimana"], [], "harus menolak, tidak ada kolom timestamp"),
     ("EDW02", "edge_waktu", ["tren penjualan bulan lalu apa"], [], "harus menolak, tidak ada kolom timestamp"),
     ("EDW03", "edge_waktu", ["produk apa yang laku hari ini"], [], "harus menolak, tidak ada kolom timestamp"),
     ("EDW04", "edge_waktu", ["bagaimana penjualan tahun ini dibanding tahun lalu"], [], "harus menolak, tidak ada kolom timestamp"),
-    ("EDW05", "edge_waktu", ["kategori apa yang lagi tren sekarang"], [], "harus menolak, tidak ada kolom timestamp"),
 
     # --- Edge cases: refusal per-pelanggan (HARUS tidak pakai tool) (3) ---
     ("EDU01", "edge_pelanggan", ["pelanggan mana yang paling sering beli sabun mandi"], [], "harus menolak, tidak ada user_id"),
