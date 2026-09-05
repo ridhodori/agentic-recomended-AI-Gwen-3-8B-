@@ -1424,19 +1424,7 @@ for doc in sample['documents']:
 ```
 Expected: count matches the catalog row count, and the printed embedded document text's `terjual: Nx` matches the regenerated `katalog_produk.csv` values (confirms Task 6's `upsert()` fix actually took effect, not stale `add()`-era text).
 
-- [ ] **Step 6: Commit** (the regenerated `katalog_produk.csv` -- the ChromaDB files themselves are a persistent local DB, not typically tracked in git; check `.gitignore` before adding)
-
-```bash
-git status
-git add chroma_db/katalog_produk.csv
-git commit -m "chore: regenerate katalog_produk.csv with net-qty terjual from transaction_day*.csv
-
-Re-ran aggregate_sales.py (net item_qty sum) and build_index.py
-(upsert-based, see Task 6) against the new transaction_day1/2/3.csv
-data. Backup of the pre-v2 catalog kept at katalog_produk.csv.bak-pre-v2.
-
-Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
-```
+- [ ] **Step 6: No commit for this task** -- `chroma_db/` (which holds both `katalog_produk.csv` and the ChromaDB files) is listed in `.gitignore` as a whole directory; `git add chroma_db/katalog_produk.csv` would be refused/no-op (`git status` will show it as untracked, not as a pending change). This is intentional, matching how `transaction_data/` is also fully gitignored -- both are regenerated data, not source. Confirm with `git status` that no unexpected tracked files changed, then move on to Task 10 -- nothing to commit here.
 
 ---
 
