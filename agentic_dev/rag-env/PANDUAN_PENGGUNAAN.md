@@ -12,7 +12,7 @@ sesekali saat data berubah), lalu agen (`query.py`) dipakai berulang-ulang:
 | Urutan | Script | Fungsi | Perlu diulang? |
 |---|---|---|---|
 | 1 | `crawl_alfagift.py` | Ambil katalog produk dari alfagift.id -> `katalog_produk.csv` | Sesekali, kalau katalog mau di-refresh |
-| 2 | `aggregate_sales.py` | Hitung popularitas produk dari `transaction_data.csv` -> kolom `terjual` | Setiap kali `katalog_produk.csv` atau `transaction_data.csv` berubah |
+| 2 | `aggregate_sales.py` | Hitung popularitas produk (net qty) dari `transaction_data/transaction_day*.csv` -> kolom `terjual` | Setiap kali `katalog_produk.csv` berubah, atau ada file `transaction_dayN.csv` baru/berubah |
 | 3 | `build_index.py` | Embed katalog ke ChromaDB supaya bisa dicari | Setiap kali `katalog_produk.csv` berubah |
 | 4 | `query.py` | **Pakai agennya** -- ini yang dijalankan berulang-ulang | Setiap kali mau tanya |
 
@@ -60,12 +60,21 @@ tool lengkapnya):
 - "Kategori mana yang variasi produknya paling sedikit?" (assortment gap)
 - "Berapa rentang harga produk di kategori minuman?" (atau seluruh katalog kalau segmen dikosongkan)
 - "Produk apa yang cocok dipromosikan bareng [produk X]?"
+- "Penjualan tanggal 2 Agustus 2026 kategori apa yang paling laris?" (filter tanggal/rentang tanggal spesifik, kalau tanggalnya ada di data yang ter-load)
+- "Produk sabun mandi apa yang lagi naik daun/trending?" (bandingkan tanggal terbaru vs tanggal sebelumnya di data)
+- "Jam berapa penjualan minuman paling ramai?" (peak hour, untuk staffing/timing promo)
 
-**Yang TIDAK bisa dijawab:** apa pun bertema waktu (mis. "penjualan minggu
-ini", "tren bulan lalu") atau per-pelanggan (mis. "pelanggan mana yang paling
-sering beli X") -- kedua sumber data tidak punya kolom timestamp atau
-user_id. Agen seharusnya menolak dengan jujur, bukan mengarang jawaban;
-kalau ia mengarang, itu bug (laporkan / cek system prompt di `query.py`).
+**Yang TIDAK bisa dijawab:** pertanyaan per-pelanggan (mis. "pelanggan mana
+yang paling sering beli X") -- data tidak punya kolom `user_id` sama sekali.
+Pertanyaan bertema waktu **BISA** dijawab sekarang (`transaction_time` sudah
+ada di data transaksi, lihat `2026-09-06-transaction-data-v2-design.md`),
+TAPI cuma untuk tanggal/rentang yang benar-benar ada di
+`transaction_data/transaction_day*.csv` yang ter-load -- agen tahu rentang
+tanggal yang tersedia secara dinamis (bukan hardcode) dan akan menolak jujur
+kalau tanggalnya di luar itu, atau kalau frasa waktunya relatif dan tidak
+jelas cakupannya (mis. "bulan lalu" ketika data cuma mencakup beberapa hari).
+Agen seharusnya menolak dengan jujur, bukan mengarang jawaban di kedua kasus
+ini; kalau ia mengarang, itu bug (laporkan / cek system prompt di `query.py`).
 
 ## Cara Menguji Agen
 
@@ -157,7 +166,7 @@ kategori itu.
 | Error `IndexError` dari ChromaDB | Tool dipanggil dengan argumen kosong -- sudah ada guard di `query.py`, kalau masih muncul berarti ada tool baru tanpa guard serupa |
 | `search_catalog`/cari produk mirip kadang terasa lebih lambat sesekali (bukan konsisten) | Normal -- `query.py` sekarang retry sekali otomatis kalau panggilan embedding ke Ollama gagal/lambat sesaat, sebelum benar-benar error ke pengguna |
 | Sesekali (bukan tiap giliran) jawaban terasa 2-3x lebih lama dari biasanya | Normal -- ada loop verifikasi akurasi (`verify_and_revise()`) yang mengecek angka di jawaban terhadap data tool; kalau ada yang tidak cocok atau jawabannya klaim kualitatif tanpa angka, sistem memanggil model sekali lagi untuk mengoreksi sebelum dikirim. Diukur cuma ~8% giliran yang butuh ini, jadi mayoritas giliran tidak terpengaruh -- lihat `infrastructure_agentic.md` bagian Graph #Bagian 2 untuk benchmark lengkap |
-| `harga: 0` di beberapa produk | Bukan bug -- beberapa baris di `transaction_data.csv` memang tercatat harga 0 (data asli, bukan hasil olahan kita) |
+| `harga: 0` di beberapa produk | Bukan bug -- beberapa baris di `transaction_data/transaction_day*.csv` memang tercatat harga 0 (data asli, bukan hasil olahan kita) |
 | Agen tidak ingat pertanyaan sebelumnya | `SESSION_ID`/`USER_ID` di `query.py` berubah antar panggilan, sesi baru dibuat setiap turn, atau `agent_sessions.db` terhapus/rusak |
 | Mau tahu tool apa saja yang dipanggil dan berapa lama | Cek `tool_calls.log` (format: waktu \| nama tool \| argumen \| durasi \| status) -- lebih cepat daripada menebak dari traceback |
 | Muncul traceback `LiteLLM:ERROR: logging_worker.py ... TimeoutError` di terminal | Tidak fatal (lihat Known Issues di `rag-setup-windows.md`) -- kalau sering muncul setelah menambah tool baru, tool itu kemungkinan belum dibungkus `async` + `asyncio.to_thread` seperti tool lainnya |

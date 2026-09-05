@@ -58,31 +58,49 @@ perbaiki plumbing-nya. Jangan langsung menambah tool baru sebelum memastikan yan
 
 | Tool | Sumber data | Untuk pertanyaan seperti |
 |---|---|---|
-| `get_top_categories(top_n, terendah)` | transaction_data.csv | "kategori apa yang paling laris" / "paling sedikit" |
-| `get_top_sellers(segment, top_n)` | transaction_data.csv | "produk terlaris di kategori/segmen X" |
+| `get_top_categories(top_n, terendah, start_date, end_date)` | transaction_data/transaction_day*.csv | "kategori apa yang paling laris" / "paling sedikit", opsional difilter tanggal/rentang tanggal |
+| `get_top_sellers(segment, top_n, start_date, end_date)` | transaction_data/transaction_day*.csv | "produk terlaris di kategori/segmen X", opsional difilter tanggal/rentang tanggal |
+| `get_trending_products(segment, top_n)` | transaction_data/transaction_day*.csv | "produk apa yang lagi naik daun/trending di segmen X" -- bandingkan net qty tanggal terbaru vs tanggal sebelumnya di data |
+| `get_trending_categories(top_n)` | transaction_data/transaction_day*.csv | "kategori apa yang lagi naik daun/trending" -- versi level-kategori dari tool di atas |
+| `get_peak_hours(segment, top_n)` | transaction_data/transaction_day*.csv | "jam berapa penjualan paling ramai" (segmen kosong = seluruh data), untuk keputusan staffing/timing promo |
 | `get_worst_sellers(segment, top_n)` | katalog_produk.csv | "produk paling tidak laku / belum pernah terjual" |
 | `get_category_assortment(top_n, terendah)` | katalog_produk.csv | "kategori dengan variasi produk paling sedikit/banyak" |
 | `get_price_range(segment)` | katalog_produk.csv | "rentang harga produk di kategori/segmen X" (segment kosong = seluruh katalog) |
 | `find_cross_sell_candidates(product_name, top_k)` | katalog_produk.csv + ChromaDB | "produk apa yang cocok dipromosikan bareng produk X" |
 | `search_catalog(query, category, max_price)` | katalog_produk.csv + ChromaDB | pencarian bebas berdasarkan kemiripan makna |
 
-**Batasan yang berlaku ke semua tool di atas:** tidak ada kolom timestamp/tanggal di
-kedua sumber data, jadi tidak ada satu pun tool yang bisa menjawab pertanyaan bertema
-waktu (mis. "penjualan minggu ini", "tren bulan lalu"). System prompt agen sudah
-diinstruksikan untuk menolak menjawab pertanyaan seperti ini alih-alih mengarang.
+**Rentang waktu yang didukung:** sejak `transaction_time` ditambahkan ke data
+transaksi (lihat `2026-09-06-transaction-data-v2-design.md`), tool-tool di atas BISA
+menjawab pertanyaan bertema waktu -- tapi cuma untuk tanggal yang benar-benar ada di
+`transaction_data/transaction_day*.csv` yang ter-load. Rentang yang tersedia
+dihitung otomatis dari data saat itu (bukan hardcode di prompt) dan disisipkan ke
+instruksi agen setiap giliran, sama seperti info katalog di `_build_produk_instruction`.
+Pertanyaan dengan tanggal/rentang DI LUAR data yang ter-load, atau frasa relatif yang
+cakupannya tidak jelas (mis. "bulan lalu" kalau data cuma mencakup beberapa hari),
+tetap ditolak jujur oleh system prompt, bukan dikarang. **Yang masih tidak bisa
+dijawab sama sekali:** pertanyaan per-pelanggan (mis. "pelanggan mana yang paling
+sering beli X") -- data tidak punya kolom `user_id` sama sekali, terlepas dari
+kolom waktu.
 
 ## Dua Sumber Data, Dua Peran Berbeda
 
 | Sumber | Isi | Peran |
 |---|---|---|
-| `katalog_produk.csv` + koleksi ChromaDB `products` | Produk hasil crawl (nama, kategori, harga, deskripsi, **terjual**) | Pencarian semantik produk + metadata terstruktur. Kolom `terjual` diisi dari agregasi `transaction_data.csv`. |
-| `transaction_data.csv` | Log transaksi mentah (~1.5 juta baris): `product_name, product_category_name_lvl_0, product_price, product_short_desc` | Dipakai **live** untuk hitung produk terlaris per segmen (`get_top_sellers`). |
+| `katalog_produk.csv` + koleksi ChromaDB `products` | Produk hasil crawl (nama, kategori, harga, deskripsi, **terjual**) | Pencarian semantik produk + metadata terstruktur. Kolom `terjual` diisi dari agregasi `transaction_data/transaction_day*.csv` (net qty, lihat di bawah). |
+| `transaction_data/transaction_day*.csv` | Log transaksi mentah, satu file per hari (mis. `transaction_day1.csv` = 2026-08-01), @ ~1 juta baris: `product_name, product_category_name_lvl_0, product_price, product_short_desc, transaction_time, item_qty` | Dipakai **live** untuk hitung produk terlaris per segmen (`get_top_sellers`), tren antar hari, jam ramai, dan filter tanggal. |
 
-**Keterbatasan penting:** `transaction_data.csv` **tidak punya kolom timestamp
-atau user_id**. Artinya sistem ini bisa menghitung *seberapa sering* sebuah
-produk terjual, tapi **tidak bisa** menjawab pertanyaan bertema waktu (mis.
-"apa yang laku minggu ini") atau riwayat per-pengguna (`get_user_history()`
-dari TODO awal tidak bisa dibangun dari data ini tanpa kolom tambahan).
+**Terjual = net qty, bukan jumlah baris:** `item_qty` bisa negatif (retur) --
+"terjual" yang dilaporkan semua tool adalah `sum(item_qty)` per produk/kategori
+(retur mengurangi angka), BUKAN jumlah baris transaksi seperti implementasi lama
+sebelum kolom ini ada.
+
+**Keterbatasan yang masih berlaku:** data transaksi **tidak punya kolom
+`user_id`** -- riwayat/rekomendasi per-pengguna (`get_user_history()` dari TODO
+awal) tetap tidak bisa dibangun dari data ini tanpa kolom tambahan. Kolom waktu
+(`transaction_time`) SUDAH ada sejak `2026-09-06-transaction-data-v2-design.md`,
+jadi pertanyaan bertema waktu sekarang bisa dijawab selama tanggalnya ada di data
+yang ter-load -- lihat catatan "Rentang waktu yang didukung" di bagian
+[Tools yang Tersedia](#tools-yang-tersedia).
 
 ## Struktur Folder (aktual)
 
@@ -90,7 +108,7 @@ dari TODO awal tidak bisa dibangun dari data ini tanpa kolom tambahan).
 D:\agentic\
 ├── agentic_dev\rag-env\           # virtual environment + semua script
 │   ├── crawl_alfagift.py          # crawl seluruh katalog alfagift.id -> katalog_produk.csv
-│   ├── aggregate_sales.py         # agregasi transaction_data.csv -> kolom "terjual" di katalog
+│   ├── aggregate_sales.py         # agregasi transaction_data/transaction_day*.csv -> kolom "terjual" (net qty) di katalog
 │   ├── build_index.py             # index katalog_produk.csv (+terjual) ke ChromaDB
 │   ├── query.py                   # agen tool-calling: segmen -> rekomendasi
 │   ├── test_agent_cases.py        # 104 kasus uji regresi thd root_agent (router + 2 spesialis sejak migrasi Graph, lihat infrastructure_agentic.md bagian Graph), lihat PANDUAN_PENGGUNAAN.md
@@ -105,7 +123,10 @@ D:\agentic\
 │   ├── agent_sessions.db          # riwayat percakapan (SqliteSessionService), lintas-restart
 │   └── (file persistent ChromaDB)
 └── transaction_data\
-    └── transaction_data.csv       # log transaksi mentah (~1.5 juta baris, ~222 MB)
+    ├── transaction_day1.csv       # log transaksi mentah 2026-08-01 (~1 juta baris)
+    ├── transaction_day2.csv       # log transaksi mentah 2026-08-02 (~1 juta baris)
+    └── transaction_day3.csv       # log transaksi mentah 2026-08-03 (~1 juta baris) -- dst,
+                                    # file baru transaction_dayN.csv otomatis ter-load (glob)
 ```
 
 > Catatan: struktur folder ini menyimpang dari rencana awal (`C:\rag-project\`)
@@ -134,8 +155,10 @@ waktu 2-3+ jam untuk seluruh katalog (~15.000-20.000 produk).
 
 Jalankan **setelah** crawl selesai sepenuhnya (bukan sambil crawl jalan --
 keduanya menulis file yang sama dan bisa balapan/race condition). Script ini
-melakukan full recompute dari `transaction_data.csv`, jadi aman dijalankan
-ulang kapan saja setelah katalog final.
+melakukan full recompute dari seluruh `transaction_data/transaction_day*.csv`
+yang ada (net qty, bukan jumlah baris -- lihat
+`2026-09-06-transaction-data-v2-design.md`), jadi aman dijalankan ulang kapan
+saja setelah katalog final ATAU setelah ada file `transaction_dayN.csv` baru.
 
 ### 3. Build index ChromaDB
 
@@ -173,7 +196,7 @@ konteks percakapan (rekomendasi sebelumnya) tetap diingat.
 - [x] Python 3.10+ terpasang (di virtual environment `rag-env`)
 - [x] `google-adk[extensions]` terpasang (extra `[extensions]` wajib untuk `LiteLlm`)
 - [x] Data katalog produk (hasil crawl, kolom id/nama/kategori/harga/deskripsi/terjual)
-- [x] Data transaksi mentah (`transaction_data.csv`, disediakan pengguna)
+- [x] Data transaksi mentah (`transaction_data/transaction_day*.csv`, disediakan pengguna, satu file per hari)
 
 ## Batasan VRAM 8GB / RAM 32GB
 
@@ -194,13 +217,13 @@ konteks percakapan (rekomendasi sebelumnya) tetap diingat.
 - **`ImportError: LiteLLM support requires: pip install google-adk[extensions]`** -> `google-adk` dasar tidak menyertakan LiteLLM; install dengan extra `[extensions]`.
 - **Jawaban akhir berisi monolog/reasoning model, bukan jawaban bersih** -> `qwen3-agent:latest` mengembalikan reasoning trace sebagai `Part` terpisah dengan `thought=True`. Kalau kode mengambil `event.content.parts[0].text` tanpa filter, yang terambil bisa jadi reasoning-nya, bukan jawaban akhir. `query.py` sudah memfilter part yang `thought=True`.
 - **`IndexError: list index out of range` di `chromadb`'s `normalize_embeddings`** -> terjadi kalau tool `search_catalog`/`find_cross_sell_candidates` dipanggil model dengan argumen string kosong; `ollama.embeddings(prompt="")` diam-diam mengembalikan vektor kosong. `query.py` sudah menolak argumen kosong sebelum memanggil embedding.
-- **Traceback `LiteLLM:ERROR: logging_worker.py ... TimeoutError` muncul di terminal saat agen jalan** -> tidak fatal (dicatat lalu ditelan di dalam LiteLLM sendiri, tidak menghentikan `query.py`), tapi menandakan event loop asyncio sedang macet. Root cause: `google-adk` memanggil tool sinkron langsung di event loop kalau tidak dibungkus `async` (lihat `google.adk.tools.function_tool._invoke_callable`), dan tool di sini melakukan panggilan HTTP ke Ollama + scan pandas atas `transaction_data.csv` (~1.5 juta baris) -- selama itu event loop beku, termasuk task logging internal LiteLLM yang punya batas waktu 20 detik (`LOGGING_WORKER_MAX_TIME_PER_COROUTINE`). Semua tool di `query.py` sudah dibungkus `async def` yang menjalankan implementasinya lewat `asyncio.to_thread` untuk menghindari ini. Kalau muncul lagi setelah menambah tool baru, kemungkinan tool itu belum dibungkus dengan pola yang sama.
+- **Traceback `LiteLLM:ERROR: logging_worker.py ... TimeoutError` muncul di terminal saat agen jalan** -> tidak fatal (dicatat lalu ditelan di dalam LiteLLM sendiri, tidak menghentikan `query.py`), tapi menandakan event loop asyncio sedang macet. Root cause: `google-adk` memanggil tool sinkron langsung di event loop kalau tidak dibungkus `async` (lihat `google.adk.tools.function_tool._invoke_callable`), dan tool di sini melakukan panggilan HTTP ke Ollama + scan pandas atas `transaction_data/transaction_day*.csv` (~3 juta baris gabungan sejak `transaction_time`/`item_qty` ditambahkan, dulu ~1.5 juta baris di satu file) -- selama itu event loop beku, termasuk task logging internal LiteLLM yang punya batas waktu 20 detik (`LOGGING_WORKER_MAX_TIME_PER_COROUTINE`). Semua tool di `query.py` sudah dibungkus `async def` yang menjalankan implementasinya lewat `asyncio.to_thread` untuk menghindari ini. Kalau muncul lagi setelah menambah tool baru, kemungkinan tool itu belum dibungkus dengan pola yang sama.
 - **Agen menjawab "tool tidak mendukung" untuk pertanyaan yang masuk akal** (mis. dulu tidak ada cara mencari kategori dengan penjualan terendah) -> ini bukan bug, tapi tanda ada kesenjangan kemampuan tool. Solusinya tambah tool baru (lihat [Tools yang Tersedia](#tools-yang-tersedia)) -- tapi cek dulu apakah ini benar-benar kesenjangan kemampuan, bukan sekadar argumen yang belum divalidasi di tool yang sudah ada (dua hal itu butuh perbaikan berbeda).
 - **(Ditemukan & diperbaiki lewat `test_agent_cases.py`, 104 kasus)** `get_price_range` menolak segment kosong ("Segmen kosong, tidak bisa menghitung rentang harga") padahal pertanyaan "rentang harga seluruh katalog" itu valid -> tidak konsisten dengan `get_worst_sellers` yang sudah memperlakukan segment kosong sebagai "seluruh katalog". Diperbaiki: segment kosong sekarang menghitung rentang harga seluruh `katalog_df` (8.461 produk), bukan menolak.
 - **(Ditemukan & diperbaiki)** Pertanyaan tren tanpa kata waktu eksplisit (mis. "kategori apa yang lagi tren sekarang") tidak tertangkap aturan penolakan bertema waktu di system prompt -- karena instruksinya cuma memberi contoh frasa eksplisit ("minggu ini", "bulan lalu"), model menjawabnya seolah itu pertanyaan "kategori paling laris total" biasa (mengarang kesan tren dari angka akumulasi). Diperbaiki: system prompt sekarang eksplisit menyebut kata seperti "tren", "lagi hits/viral", "terkini", "belakangan ini" sebagai sinyal tema waktu yang tetap harus ditolak, sambil boleh menawarkan angka akumulasi total sebagai alternatif asal tidak disamarkan sebagai tren.
 - **(Ditemukan & diperbaiki)** `find_cross_sell_candidates` kadang tidak terpanggil walau pertanyaan eksplisit minta "produk serupa/mirip" -- terutama kalau ada embel-embel lain ("...yang penjualannya rendah", "...yang lebih laku untuk kategori itu") atau kalau nama produk konkretnya baru didapat dari tool lain di giliran yang sama (mis. turunan dari kategori). Model cenderung berhenti di tool pertama dan menyuruh pengguna mencari sendiri, alih-alih mengklaim hubungan cross-sell tanpa membuktikannya lewat tool. Diperbaiki: aturan #6 di system prompt sekarang eksplisit mengizinkan/mendorong chaining dua tool dalam satu giliran (cari nama produk konkret dulu, baru panggil `find_cross_sell_candidates` dengan nama itu) dan melarang mengklaim cross-sell tanpa memanggil tool-nya.
-- **(Ditemukan, belum diperbaiki -- masalah data, bukan bug kode)** Kolom `product_category_name_lvl_0` di `transaction_data.csv` kadang berisi label yang tidak nyambung dengan produknya (mis. produk sampo Zinc tercatat berkategori "Fashion (Old)"). `get_top_sellers` menampilkan kolom ini apa adanya, jadi noise data mentah ini ikut terlihat pengguna. Bukan bug -- `get_top_sellers` menemukan produknya lewat pencocokan `segment` di `product_name` ATAU `product_category_name_lvl_0`, jadi hasilnya tetap benar meski label kategori yang ditampilkan salah. Kalau mau dibersihkan: ganti kolom kategori yang ditampilkan `get_top_sellers` dengan join ke `katalog_df["kategori"]` (lebih bersih) alih-alih memakai `product_category_name_lvl_0` mentah dari `transaction_data.csv`.
-- **(Ditemukan & diperbaiki, ditemukan lewat testing manual di luar 104-kasus)** `search_catalog` dengan argumen `category` bisa mengembalikan "Tidak ada produk yang cocok" padahal produknya jelas ada -- akar masalahnya sama dengan poin di atas: `katalog_produk.csv["kategori"]` (mis. "Sabun Mandi") dan `transaction_data.csv["product_category_name_lvl_0"]` (mis. "Personal Care") pakai vokabuler berbeda untuk kategori yang sama. Model kadang mengisi `category` dengan istilah dari vokabuler `get_top_sellers` (mis. "Personal Care") padahal `search_catalog` cuma mengenal vokabuler `katalog_df["kategori"]` -- filternya lalu tidak cocok dengan SATU PUN dari 15 kandidat semantik teratas, hasilnya kosong walau pencarian semantiknya sendiri dapat kandidat relevan. Diperbaiki: kalau filter kategori bikin nol hasil padahal hasil semantik (tanpa filter kategori) tidak kosong, `search_catalog` sekarang menurunkan filter itu jadi catatan ("Kategori 'X' tidak ketemu persis...") dan tetap menampilkan hasil pencarian semantiknya, bukan mengembalikan nol hasil. Diverifikasi: `_search_catalog_impl("sabun mandi", "Personal Care", 0)` sekarang mengembalikan produk sabun mandi asli (dulu: "Tidak ada produk yang cocok"), sementara `category="Sabun Mandi"` (vokabuler yang benar) tetap memfilter seperti biasa.
+- **(Ditemukan, belum diperbaiki -- masalah data, bukan bug kode)** Kolom `product_category_name_lvl_0` di `transaction_data/transaction_day*.csv` kadang berisi label yang tidak nyambung dengan produknya (mis. produk sampo Zinc tercatat berkategori "Fashion (Old)"). `get_top_sellers` menampilkan kolom ini apa adanya, jadi noise data mentah ini ikut terlihat pengguna. Bukan bug -- `get_top_sellers` menemukan produknya lewat pencocokan `segment` di `product_name` ATAU `product_category_name_lvl_0`, jadi hasilnya tetap benar meski label kategori yang ditampilkan salah. Kalau mau dibersihkan: ganti kolom kategori yang ditampilkan `get_top_sellers` dengan join ke `katalog_df["kategori"]` (lebih bersih) alih-alih memakai `product_category_name_lvl_0` mentah dari `transaction_data/transaction_day*.csv`.
+- **(Ditemukan & diperbaiki, ditemukan lewat testing manual di luar 104-kasus)** `search_catalog` dengan argumen `category` bisa mengembalikan "Tidak ada produk yang cocok" padahal produknya jelas ada -- akar masalahnya sama dengan poin di atas: `katalog_produk.csv["kategori"]` (mis. "Sabun Mandi") dan `transaction_data/transaction_day*.csv["product_category_name_lvl_0"]` (mis. "Personal Care") pakai vokabuler berbeda untuk kategori yang sama. Model kadang mengisi `category` dengan istilah dari vokabuler `get_top_sellers` (mis. "Personal Care") padahal `search_catalog` cuma mengenal vokabuler `katalog_df["kategori"]` -- filternya lalu tidak cocok dengan SATU PUN dari 15 kandidat semantik teratas, hasilnya kosong walau pencarian semantiknya sendiri dapat kandidat relevan. Diperbaiki: kalau filter kategori bikin nol hasil padahal hasil semantik (tanpa filter kategori) tidak kosong, `search_catalog` sekarang menurunkan filter itu jadi catatan ("Kategori 'X' tidak ketemu persis...") dan tetap menampilkan hasil pencarian semantiknya, bukan mengembalikan nol hasil. Diverifikasi: `_search_catalog_impl("sabun mandi", "Personal Care", 0)` sekarang mengembalikan produk sabun mandi asli (dulu: "Tidak ada produk yang cocok"), sementara `category="Sabun Mandi"` (vokabuler yang benar) tetap memfilter seperti biasa.
 - **Baris `verify_and_revise | MASIH MISMATCH...` muncul di `tool_calls.log`** -> bukan crash, ini observability yang disengaja dari loop verifikasi akurasi (`verify_and_revise()` di `query.py`, lihat `infrastructure_agentic.md` bagian Graph #Bagian 2). Artinya: draft jawaban punya angka yang tidak cocok data tool, langkah revisi otomatis mencoba memperbaiki, TAPI hasil revisinya sendiri masih tidak cocok -- diamati langsung ini BISA terjadi (model revisi berbasis LLM lokal, probabilistik, bukan jaminan keras) meski jarang. Tidak ada retry lanjutan (disengaja, supaya biaya tetap murah) -- kalau baris ini sering muncul, jawaban yang dikirim ke pengguna kemungkinan masih salah dan perlu dicek manual dari `draft_nums`/`revised_nums`/`tool_nums` yang dicatat di baris yang sama.
 - **(Ditemukan lewat testing interaktif pengguna di luar 104-kasus, MITIGASI BERLAPIS -- bukan satu fix tunggal, lihat `infrastructure_agentic.md` bagian Graph #4 untuk kronologi lengkap)** Pertanyaan yang dibungkus sebagai permintaan kreatif/strategis (mis. "berikan aku 5 rekomendasi promo yang bisa dibuat berdasarkan 5 produk terlaris") kadang membuat root menjawab lancar dengan nama produk, harga, dan persentase diskon spesifik TANPA memanggil tool apa pun -- dikonfirmasi lewat `tool_calls.log` (nol baris baru untuk giliran itu). Percobaan 1 (paragraf baru di `ROOT_INSTRUCTION`) mengurangi tapi TIDAK menghilangkan masalah -- pengguna mengulang pertanyaan identik dan bug kambuh lagi. Percobaan 2 (paksa tool-call di level API lewat `tool_choice`) gagal total: LiteLLM membuang parameter itu untuk provider `ollama_chat` (`llms/ollama/chat/transformation.py:186`, komentar sumbernya sendiri "causes ollama requests to hang"). Perbaikan aktual yang dipasang: `verify_and_revise()` sekarang menolak draft jawaban kalau nol tool dipanggil giliran ini TAPI draft tetap menyebut >= 3 angka konkret asing (bukan dari pertanyaan pengguna) -- pola yang cuma terjadi pada fabrikasi, karena penolakan sah (tema waktu/per-pelanggan) tidak pernah menyebut angka spesifik. Draft yang ditolak diganti pesan jujur yang meminta pengguna bertanya ulang lebih eksplisit, bukan dikirim apa adanya.
 
@@ -216,14 +239,15 @@ konteks percakapan (rekomendasi sebelumnya) tetap diingat.
 - [x] Instruksi dinamis: `_build_produk_instruction()` (`InstructionProvider`, **REVISI setelah migrasi Graph:** dulu `_build_instruction()` dipasang di satu-satunya root agent, sekarang dipasang hanya di `produk_specialist`) menyisipkan jumlah produk/index/tanggal update ke instruksinya tiap giliran
 - [x] Retry sekali untuk panggilan embedding Ollama yang transient-fail (`_embed()` di `query.py`)
 - [x] Loop verifikasi akurasi jawaban akhir vs. data tool -- `verify_and_revise()` di `query.py` (opsi hybrid, dipilih lewat benchmark nyata di `benchmark_verify_loop.py`, lihat `infrastructure_agentic.md` bagian Graph #Bagian 2 untuk angka lengkap)
-- [ ] `get_user_history()` -- **tidak bisa dibangun** dari `transaction_data.csv` saat ini (tidak ada user_id/timestamp). Perlu sumber data baru kalau personalisasi per-user tetap diinginkan.
+- [ ] `get_user_history()` -- **tidak bisa dibangun** dari `transaction_data/transaction_day*.csv` saat ini -- `transaction_time` sudah ada sejak `2026-09-06-transaction-data-v2-design.md`, tapi tetap tidak ada kolom `user_id`. Perlu sumber data baru kalau personalisasi per-user tetap diinginkan.
 - [x] Memori lintas-run -- sudah lewat `SqliteSessionService` persistent (raw histori percakapan bertahan lintas restart)
 - [x] Kanari ukuran sesi: `_warn_if_session_growing()` di `query.py` memperingatkan sekali per ambang batas (60/120/240/480/960 event) kalau sesi tunggal-abadi (`SESSION_ID` tetap) mulai mendekati batas `num_ctx=8192` -- **bukan solusi penuh**, cuma sinyal dini; lihat `infrastructure_agentic.md` bagian Context untuk kenapa windowing/summarization sungguhan sengaja ditunda
 - [ ] Memori semantik lintas-sesi (`google.adk.memory.BaseMemoryService`) -- **ditunda, keputusan sadar**: `query.py` cuma punya satu `SESSION_ID` abadi, sementara API ini dirancang untuk mencari lintas banyak sesi; dipilih menangani risiko context-window (poin kanari di atas) dulu karena lebih konkret, lihat `infrastructure_agentic.md` bagian Context
 - [ ] Percepat `build_index.py` -- saat ini satu request embedding per baris secara berurutan (~4 baris/detik); bisa dipercepat dengan batching atau request paralel ke Ollama kalau GPU/CPU masih ada headroom
-- [ ] Tambah error handling: koneksi Ollama gagal, `transaction_data.csv` tidak ditemukan
+- [ ] Tambah error handling: koneksi Ollama gagal, tidak ada file `transaction_data/transaction_day*.csv` yang cocok pola glob
 - [x] Uji ketahanan agen terhadap segmen ambigu / di luar katalog -- lewat `test_agent_cases.py` (104 kasus/107 giliran, termasuk kategori EDX/BD khusus untuk ini); 0 crash, 3 bug ditemukan+diperbaiki (lihat Known Issues)
 - [x] Evaluasi kualitas retrieval & kualitas rekomendasi cross-sell secara sistematis -- `test_agent_cases.py` (bukan cuma spot-check manual lagi), tapi masih penilaian manual per-kasus (baca jawaban satu-satu), belum ada scoring otomatis -- lihat poin baru di bawah kalau mau dikembangkan lebih jauh
-- [ ] Perbaiki kualitas kolom kategori yang ditampilkan `get_top_sellers` -- saat ini pakai `product_category_name_lvl_0` mentah dari `transaction_data.csv` yang kadang tidak nyambung dengan produknya (lihat Known Issues); pertimbangkan join ke `katalog_df["kategori"]` yang lebih bersih
+- [ ] Perbaiki kualitas kolom kategori yang ditampilkan `get_top_sellers` -- saat ini pakai `product_category_name_lvl_0` mentah dari `transaction_data/transaction_day*.csv` yang kadang tidak nyambung dengan produknya (lihat Known Issues); pertimbangkan join ke `katalog_df["kategori"]` yang lebih bersih
 - [ ] Scoring otomatis untuk `test_agent_cases.py` -- saat ini "benar/salah" masih dinilai manual dengan membaca `test_report.jsonl`; bisa dikembangkan jadi assertion otomatis (mis. cek angka di jawaban cocok dengan hasil tool, bukan cuma cek nama tool yang terpanggil)
 - [ ] Setelah crawl penuh selesai: jalankan ulang `aggregate_sales.py` lalu `build_index.py` untuk index produksi final (index saat ini kemungkinan masih index test skala kecil)
+- [ ] **Implementasi `2026-09-06-transaction-data-v2-design.md`** (desain sudah disetujui pengguna, kode belum ditulis): net qty (`sum(item_qty)`) ganti hitung baris, glob multi-file `transaction_day*.csv`, filter tanggal opsional di `get_top_sellers`/`get_top_categories`, tool baru `get_trending_products`/`get_trending_categories`/`get_peak_hours`, instruksi dwibahasa (Inggris untuk LLM, Indonesia untuk jawaban akhir) + mitigasi drift-bahasa saat ekstraksi entitas, dan regenerasi `katalog_produk.csv` + index ChromaDB dari data transaksi baru
