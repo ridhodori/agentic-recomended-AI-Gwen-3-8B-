@@ -459,6 +459,98 @@ async def get_peak_hours(segment: str = "", top_n: int = 5) -> str:
     return await asyncio.to_thread(_get_peak_hours_impl, segment, top_n)
 
 
+def _latest_two_dates(df: pd.DataFrame):
+    """(tanggal_sebelumnya, tanggal_terbaru) yang BENAR-BENAR ada di df,
+    bukan hardcode day2/day3 -- otomatis mengikuti data terbaru kalau
+    transaction_dayN.csv baru ditambahkan nanti (lihat
+    2026-09-06-transaction-data-v2-design.md bagian 3b). None kalau df
+    punya kurang dari 2 tanggal berbeda."""
+    dates = sorted(df["transaction_time"].dt.date.unique())
+    if len(dates) < 2:
+        return None
+    return dates[-2], dates[-1]
+
+
+def _trending_impl(df: pd.DataFrame, group_col: str, top_n: int) -> str:
+    """Logika bersama get_trending_products/get_trending_categories --
+    beda cuma kolom yang di-groupby (product_name vs
+    product_category_name_lvl_0)."""
+    dates = _latest_two_dates(df)
+    if dates is None:
+        return "Tidak cukup data (butuh minimal 2 tanggal berbeda) untuk menghitung tren."
+    prev_date, latest_date = dates
+
+    prev_qty = df[df["transaction_time"].dt.date == prev_date].groupby(group_col)["item_qty"].sum()
+    latest_qty = df[df["transaction_time"].dt.date == latest_date].groupby(group_col)["item_qty"].sum()
+    growth = latest_qty.subtract(prev_qty, fill_value=0).sort_values(ascending=False).head(top_n)
+
+    if growth.empty:
+        return "Tidak ada data untuk menghitung tren."
+
+    lines = [f"Dibandingkan {prev_date} vs {latest_date}:"]
+    for name, delta in growth.items():
+        lines.append(
+            f"- {name} | {prev_date}: {prev_qty.get(name, 0):.0f}x -> "
+            f"{latest_date}: {latest_qty.get(name, 0):.0f}x | perubahan: {delta:+.0f}"
+        )
+    return "\n".join(lines)
+
+
+def _get_trending_products_impl(segment: str, top_n: int) -> str:
+    df = _load_transactions()
+    if segment.strip():
+        mask = df["product_name"].str.contains(segment, case=False, na=False) | df[
+            "product_category_name_lvl_0"
+        ].str.contains(segment, case=False, na=False)
+        df = df[mask]
+        if df.empty:
+            return f"Tidak ada data penjualan untuk segmen '{segment}'."
+    return _trending_impl(df, "product_name", top_n)
+
+
+async def get_trending_products(segment: str = "", top_n: int = 5) -> str:
+    """
+    Find products with the biggest growth in net units sold between the two most
+    recent dates present in the transaction data (self-scaling: as more daily
+    files are added, "trending" automatically follows the newest data).
+
+    Args:
+      segment: Optional product/category keyword to filter by, e.g. "sabun mandi".
+        Empty ("") means consider every product, not just one segment.
+      top_n: Number of top-growing products to return.
+
+    Returns:
+      str: The two dates being compared, followed by the top-growing products with
+        their net units sold on each date and the change, sorted by biggest growth
+        first. A product present on only one of the two dates is treated as having
+        0 units on the missing date (so a brand-new hit or a vanished product both
+        show up as a large change, not skipped).
+    """
+    return await asyncio.to_thread(_get_trending_products_impl, segment, top_n)
+
+
+def _get_trending_categories_impl(top_n: int) -> str:
+    df = _load_transactions()
+    return _trending_impl(df, "product_category_name_lvl_0", top_n)
+
+
+async def get_trending_categories(top_n: int = 5) -> str:
+    """
+    Find product categories with the biggest growth in net units sold between the
+    two most recent dates present in the transaction data (self-scaling, see
+    get_trending_products).
+
+    Args:
+      top_n: Number of top-growing categories to return.
+
+    Returns:
+      str: The two dates being compared, followed by the top-growing categories
+        with net units sold on each date and the change, sorted by biggest growth
+        first.
+    """
+    return await asyncio.to_thread(_get_trending_categories_impl, top_n)
+
+
 ROOT_INSTRUCTION = """Kamu adalah router untuk asisten analisis penjualan retail toko online Alfagift.
 Tugasmu BUKAN menjawab pertanyaan sendiri -- pilih satu atau lebih spesialis
 di bawah ini sesuai jenis pertanyaan, panggil dengan parameter request berisi
@@ -891,7 +983,7 @@ kategori_specialist = Agent(
     description="Spesialis analisis kategori produk: kategori terlaris/kurang laris, assortment/variasi produk per kategori.",
     instruction=KATEGORI_INSTRUCTION,
     mode="single_turn",
-    tools=[get_top_categories, get_category_assortment],
+    tools=[get_top_categories, get_category_assortment, get_trending_categories],
     before_tool_callback=_log_before_tool,
     after_tool_callback=_log_after_tool,
 )
@@ -909,6 +1001,7 @@ produk_specialist = Agent(
         find_cross_sell_candidates,
         get_price_range,
         get_peak_hours,
+        get_trending_products,
     ],
     before_tool_callback=_log_before_tool,
     after_tool_callback=_log_after_tool,
