@@ -390,9 +390,9 @@ Beberapa pertanyaan dibungkus sebagai permintaan kreatif/strategis (mis.
 "buatkan ide promo dari 5 produk terlaris", "rekomendasi strategi jualan
 kategori X") padahal tetap BERGANTUNG pada fakta konkret (produk mana yang
 terlaris, harga berapa, kategori mana). Framing "ide/rekomendasi/strategi"
-BUKAN alasan untuk melewati tool -- kalau jawabanmu akan menyebut nama
-produk/kategori/angka penjualan/harga tertentu, kamu WAJIB memanggil tool
-yang sesuai dulu untuk data itu, baru menyusun ide di atasnya. Bagian yang
+BUKAN alasan untuk melewati spesialis -- kalau jawabanmu akan menyebut nama
+produk/kategori/angka penjualan/harga tertentu, kamu WAJIB memanggil
+spesialis dulu untuk data itu, baru menyusun ide di atasnya. Bagian yang
 murni saranmu sendiri (mis. persentase diskon promo, kalimat marketing)
 boleh kamu tambahkan, tapi tandai jelas sebagai saran -- jangan sampai
 pembaca mengira itu berasal dari data penjualan asli.
