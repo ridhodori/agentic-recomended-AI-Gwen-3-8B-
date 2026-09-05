@@ -558,6 +558,16 @@ interaktif pengguna dan SUDAH diperbaiki, ada di bawah nomor 4):
    maupun sesudah migrasi. **Tindak lanjut:** perketat instruksi routing
    `ROOT_INSTRUCTION` untuk pertanyaan harga yang memakai kata "kategori",
    lalu uji ulang.
+   - **DIPERBAIKI (sesi lanjutan):** tambah paragraf eksplisit di
+     `ROOT_INSTRUCTION` yang membedakan "kategori" sebagai TOPIK
+     (kategori_specialist) vs "kategori" sebagai PENUNJUK SEGMEN untuk
+     pertanyaan harga/produk (WAJIB produk_specialist, karena
+     kategori_specialist tidak punya tool harga sama sekali). Diverifikasi
+     LANGSUNG lewat kasus asli PR04 (`berapa harga median kategori
+     Keripik & Kerupuk`) via `run_case()`: sekarang rute ke
+     `produk_specialist` -> `get_price_range`, jawaban benar (Rp10.500
+     median, 286 produk) -- sebelumnya salah rute ke `kategori_specialist`
+     dan menolak faktual salah.
 2. **Regresi latensi -- SUITE-WIDE, bukan cuma kasus compound:** dihitung
    langsung dari `test_report.jsonl` (pasca-migrasi) vs.
    `test_report_pre_migration.jsonl` (pra-migrasi), `sum(duration_sec
@@ -586,8 +596,34 @@ interaktif pengguna dan SUDAH diperbaiki, ada di bawah nomor 4):
    di sesi terpisah, jadi ada kemungkinan variansi kontensi VRAM ikut
    berkontribusi -- tapi pola 100/104 kasus melambat dengan median +218%
    jauh melebihi yang bisa dijelaskan cuma oleh confound semacam itu.
-   **Tindak lanjut:** konfigurasikan `context_cache_config` di app/agent,
-   lalu ukur ulang latensi seluruh suite (bukan cuma CP01-CP05).
+   **Tindak lanjut YANG DISARANKAN SEBELUMNYA -- diinvestigasi, TERBUKTI
+   tidak berlaku untuk stack ini (jangan diulang):** `context_cache_config`
+   dibaca sampai ke `google/adk/models/_prompt_cache.py`, yang docstring-nya
+   sendiri bilang: "Gemini caches by creating a server-side resource...
+   Claude instead caches whatever prefix the request marks, and a model
+   reached through LiteLLM inherits whichever of the two its provider
+   implements" -- mekanismenya SELALU `cache_control_injection_points`
+   (gaya Anthropic, prefix-marking), cuma diterapkan kalau provider ada di
+   `_ANTHROPIC_PROVIDERS = {"anthropic", "bedrock", "vertex_ai"}`
+   (`lite_llm.py`). `ollama_chat` TIDAK ada di daftar itu, dan digrep
+   langsung ke source litellm terpasang (`litellm/main.py`,
+   `litellm/llms/ollama/chat/transformation.py`): satu-satunya kode yang
+   memproses `cache_control` di litellm ada di
+   `anthropic_cache_control_hook.py` -- TIDAK ADA path ollama sama sekali.
+   Ini sama persis pola "kelihatan seperti fix API tapi no-op di stack
+   ollama_chat" yang sudah terbukti di isu #4 (`tool_choice`) -- root
+   masalah sebenarnya kemungkinan besar BUKAN soal caching prompt (Ollama
+   sendiri sudah otomatis reuse KV-cache server-side untuk prefix identik,
+   tidak butuh flag klien manapun), tapi soal jumlah panggilan LLM PENUH
+   yang bertambah (root memutuskan rute + spesialis menjawab = 2 model run
+   dibanding 1 sebelumnya) -- growth ini didominasi biaya DECODE (generate
+   token baru), bukan PREFILL (proses ulang prompt lama), dan caching
+   prompt/prefix tidak menolong biaya decode sama sekali. **Tidak
+   diimplementasikan** -- mengonfigurasi `context_cache_config` di sini
+   diproyeksikan jadi kode mati lagi, bukan fix nyata. Kandidat tindak
+   lanjut yang lebih relevan (belum dicoba, belum diverifikasi): kurangi
+   `num_predict`/panjang jawaban spesialis, atau terima 1-hop-tambahan ini
+   sebagai trade-off sadar dari migrasi Graph (akurasi routing vs latensi).
 3. **Dropout sintesis cross-sell di CP01 (1 dari 4 sampel independen):**
    CP01 (`kasih rekomendasi lengkap: produk terlaris kategori Personal
    Care, rentang harganya, dan produk cross-sell-nya`) adalah kasus
@@ -619,6 +655,38 @@ interaktif pengguna dan SUDAH diperbaiki, ada di bawah nomor 4):
    benar-benar hadir di jawaban akhir, atau perluas `verify_and_revise()`
    untuk mendeteksi "bagian yang diminta tapi diam-diam hilang", bukan
    cuma mismatch angka.
+   - **DIPERBAIKI SEBAGIAN (sesi lanjutan):** `PRODUK_INSTRUCTION` diperkuat
+     persis seperti kandidat di atas -- (a) kandidat cross-sell WAJIB
+     produk LAIN berpenjualan lebih rendah, JANGAN sarankan produk acuan
+     itu sendiri; (b) kalau tool cross-sell benar-benar tidak mengembalikan
+     kandidat, katakan terus terang, jangan mengarang; (c) untuk permintaan
+     majemuk, jawaban akhir wajib memuat hasil SETIAP tool yang dipanggil,
+     jangan diam-diam menghilangkan satu bagian. Diverifikasi lewat 2
+     sampel live CP01 independen (`run_case()`, bukan cuma dibaca):
+     sampel 1 -- tool cross-sell tidak menemukan kandidat (nama produk
+     yang dikirim ke tool ternyata sudah digeneralisasi model jadi "Facial
+     Cleanser", bukan nama katalog persis -- gap TERPISAH, lihat catatan
+     di bawah) dan jawaban SEKARANG mengatakan itu terus terang, tidak lagi
+     menyarankan produk terlaris sebagai cross-sell-nya sendiri (pola bug
+     asli). Sampel 2 -- tool cross-sell berhasil dan jawaban menyebutkan 3
+     kandidat KONKRET yang berbeda dari produk acuan (Natur-e, Paseo, Bebek
+     Cairan Pembersih Kloset). **Gap terpisah ditemukan saat verifikasi ini
+     (belum diperbaiki, dicatat supaya tidak terkubur):** di sampel 1,
+     `produk_specialist` memanggil `find_cross_sell_candidates` dengan
+     `product_name="Facial Cleanser"` (istilah generik hasil parafrase
+     model) padahal `PRODUK_INSTRUCTION` poin 4 sudah eksplisit minta nama
+     PERSIS dari hasil `get_top_sellers` -- pencarian semantik lalu gagal
+     karena istilah generik tidak dekat secara embedding dengan nama
+     produk spesifik di katalog. Juga diamati di kedua sampel:
+     `get_price_range` untuk segmen "Personal Care" kadang mengembalikan
+     median 0 / semua harga 0 -- kemungkinan besar mismatch vokabuler
+     kategori antara `katalog_produk.csv["kategori"]` dan
+     `transaction_data.csv["product_category_name_lvl_0"]` yang sudah
+     didokumentasikan di tempat lain (`_search_catalog_impl`) sebagai
+     keterbatasan data yang diketahui, bukan bug baru -- model SEKARANG
+     melaporkan kegagalan ini terus terang alih-alih mengarang angka,
+     yang merupakan perilaku aman, tapi akar masalah datanya sendiri belum
+     diperbaiki.
 4. **Root melewati delegasi untuk permintaan bergaya kreatif/strategis
    (ditemukan pasca-implementasi lewat pengujian interaktif pengguna,
    MITIGASI BERLAPIS -- bukan satu fix tunggal, lihat kronologi di
@@ -775,6 +843,38 @@ interaktif pengguna dan SUDAH diperbaiki, ada di bawah nomor 4):
        cukup besar dari angka yang disebut punya basis data sungguhan,
        jadi draft yang produk & sebagian datanya nyata tidak lagi
        diblokir cuma karena menambahkan angka promosi kreatif di atasnya.
+5. **Jawaban akhir kadang menyebut nama tool internal sebagai "langkah
+   selanjutnya" alih-alih benar-benar memanggilnya (ditemukan lewat laporan
+   pengguna: bagian "Tindakan Selanjutnya: Gunakan `find_cross_sell_candidates`
+   ..." di jawaban ide-promo, tidak berguna bagi pengguna karena mereka
+   tidak bisa memanggil tool sendiri, dan membocorkan detail implementasi):**
+   root/spesialis kadang mengenali bahwa data tambahan akan memperkuat
+   jawaban, tapi alih-alih memanggil tool itu SEKARANG, cuma menyebut
+   namanya sebagai catatan di akhir jawaban -- pointless bagi pengguna.
+   - **Fix (MITIGASI BERLAPIS, pola sama seperti isu #4 di atas -- instruksi
+     teks + jaring pengaman deterministik):**
+     - `ROOT_INSTRUCTION` dan `PRODUK_INSTRUCTION` sama-sama ditambah
+       aturan eksplisit: kalau data tambahan (mis. cross-sell) akan
+       memperkuat jawaban, panggil tool/spesialis yang sesuai SEKARANG di
+       giliran yang sama -- JANGAN cuma menyebut namanya sebagai "langkah
+       selanjutnya".
+     - `_strip_trailing_meta_section()` (baru, `query.py`) -- jaring
+       pengaman deterministik yang dipasang di akhir `ask()` (setelah
+       `verify_and_revise`): buang SELURUH bagian trailer bergaya
+       "Tindakan Selanjutnya"/"Next Steps"/"Langkah Selanjutnya" dari
+       jawaban akhir kalau ada, apa pun isinya -- bukan cuma baris yang
+       menyebut nama tool, supaya tidak perlu daftar kata kunci nama tool
+       yang gampang basi kalau ada tool baru. Instruksi teks saja TIDAK
+       diandalkan sendirian di sini karena pola "model 8B lokal tidak
+       100% mengikuti instruksi teks" sudah terbukti berulang di isu #4.
+     - Diverifikasi: regex diuji terhadap contoh laporan pengguna asli
+       (section-nya terbuang bersih, sisa jawaban utuh), jawaban normal
+       tanpa section seperti ini tidak tersentuh, dan varian bahasa
+       Inggris tanpa markdown bold juga tertangkap. Dikonfirmasi ulang
+       lewat 2 sampel live CP01 (lihat isu #3 di atas) -- jawaban yang
+       memuat rekomendasi aksi bisnis GENUINE (mis. "fokus promosi produk
+       X", bukan penyebutan nama tool) sengaja TIDAK ikut terbuang, cuma
+       trailer yang benar-benar berjudul salah satu dari 3 frasa itu.
 
 Detail lengkap ada di `2026-09-05-graph-migration-design.md` (spec) dan
 `2026-09-05-graph-migration-plan.md` (rencana implementasi per-task) --
