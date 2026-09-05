@@ -176,21 +176,36 @@ def _count_lines(path):
         return 0
 
 
+_SPECIALIST_NAMES = {"kategori_specialist", "produk_specialist"}
+
+
 def _new_tool_calls(path, start_line_count):
+    """Mengembalikan (data_tools, specialists) -- dipisah supaya
+    expected_tools di CASES (nama tool data asli, mis. 'get_top_sellers')
+    tetap bisa dibandingkan tanpa perlu ditulis ulang pasca-migrasi Graph
+    (root+2 specialist), lihat 2026-09-05-graph-migration-design.md
+    bagian 6. Baris level-root (nama specialist) dan level-specialist
+    (nama tool data) sama-sama ditulis ke tool_calls.log oleh callback
+    yang berbeda (lihat spec bagian 9), dibedakan di sini lewat nama."""
     try:
         with open(path, encoding="utf-8") as f:
             lines = f.readlines()
     except FileNotFoundError:
-        return []
+        return [], []
     new_lines = lines[start_line_count:]
-    tools = []
+    data_tools = []
+    specialists = []
     for line in new_lines:
         if line.startswith("NOTE "):
             continue  # catatan verify_and_revise (mis. "MASIH MISMATCH"), bukan panggilan tool
         parts = line.split(" | ")
         if len(parts) >= 2:
-            tools.append(parts[1].strip())
-    return tools
+            name = parts[1].strip()
+            if name in _SPECIALIST_NAMES:
+                specialists.append(name)
+            else:
+                data_tools.append(name)
+    return data_tools, specialists
 
 
 async def run_case(session_id, questions):
@@ -210,12 +225,13 @@ async def run_case(session_id, questions):
             error = f"{type(e).__name__}: {e}"
             traceback.print_exc()
         duration = time.monotonic() - started
-        tools_called = _new_tool_calls(TOOL_LOG_PATH, before)
+        tools_called, specialists_called = _new_tool_calls(TOOL_LOG_PATH, before)
         turns.append(
             {
                 "question": q,
                 "answer": final_text,
                 "tools_called": tools_called,
+                "specialists_called": specialists_called,
                 "duration_sec": round(duration, 1),
                 "error": error,
             }
