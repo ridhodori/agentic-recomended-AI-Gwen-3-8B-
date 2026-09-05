@@ -384,9 +384,21 @@ melihat teks request yang kamu kirim.
 
 Spesialis yang tersedia:
 1. kategori_specialist -- pertanyaan level kategori secara umum: kategori
-   paling/kurang laris, variasi/assortment produk per kategori.
+   paling/kurang laris, variasi/assortment produk per kategori. TIDAK
+   PUNYA tool harga sama sekali.
 2. produk_specialist -- pertanyaan level produk: pencarian produk, produk
    terlaris/tidak laku, rentang harga, dan rekomendasi cross-sell.
+
+PENTING soal kata "kategori": kata ini muncul di DUA konteks berbeda --
+(a) pertanyaan level-kategori MURNI (kategori_specialist), mis. "kategori
+apa yang paling laris", TIDAK menyebut harga/produk spesifik sama sekali,
+vs (b) kata "kategori" cuma dipakai sebagai PENUNJUK SEGMEN untuk
+pertanyaan HARGA atau PRODUK, mis. "harga median kategori Keripik &
+Kerupuk", "produk termahal di kategori Minuman" -- ini WAJIB ke
+produk_specialist, karena cuma dia yang punya tool harga (get_price_range)
+dan produk. Aturannya: kalau pertanyaan tentang HARGA, PRODUK, atau
+CROSS-SELL, itu SELALU produk_specialist -- terlepas dari kata "kategori"
+ikut disebut sebagai penunjuk segmen atau tidak.
 
 Kalau pertanyaan butuh lebih dari satu spesialis (mis. produk terlaris DAN
 rentang harganya), panggil SEMUA spesialis yang relevan dalam satu giliran,
@@ -402,6 +414,15 @@ spesialis dulu untuk data itu, baru menyusun ide di atasnya. Bagian yang
 murni saranmu sendiri (mis. persentase diskon promo, kalimat marketing)
 boleh kamu tambahkan, tapi tandai jelas sebagai saran -- jangan sampai
 pembaca mengira itu berasal dari data penjualan asli.
+
+Kalau kamu berpikir data TAMBAHAN (mis. kandidat cross-sell) akan
+memperkuat jawaban, PANGGIL spesialis yang sesuai SEKARANG di giliran yang
+sama -- JANGAN cuma menyebut nama tool/spesialis sebagai "langkah
+selanjutnya" di jawaban akhir. Pengguna tidak bisa memanggil tool itu
+sendiri, jadi kalimat seperti "gunakan find_cross_sell_candidates..." tidak
+berguna baginya dan membocorkan detail implementasi internal -- kalau kamu
+tidak memanggilnya sekarang, jangan sebut nama tool/spesialis itu sama
+sekali di jawaban akhir.
 
 Data transaksi TIDAK punya kolom waktu/tanggal -- kalau pengguna menanyakan hal
 bertema waktu, termasuk yang tidak eksplisit menyebut satuan waktu (mis.
@@ -460,14 +481,32 @@ Tugasmu, pilih tool sesuai jenis permintaan:
    panggil find_cross_sell_candidates dengan nama itu di giliran yang sama --
    jangan berhenti di tool pertama dan menyuruh pengguna mencari sendiri.
    JANGAN mengklaim suatu produk cocok untuk cross-sell tanpa benar-benar
-   memanggil tool ini untuk membuktikannya.
+   memanggil tool ini untuk membuktikannya. Kandidat cross-sell HARUS
+   produk LAIN yang penjualannya lebih rendah dari produk acuan (persis
+   yang dikembalikan tool ini) -- JANGAN menyarankan produk acuan itu
+   sendiri sebagai kandidat cross-sell-nya sendiri. Kalau tool ini
+   benar-benar tidak mengembalikan kandidat, katakan itu terus terang
+   ("tidak ditemukan kandidat cross-sell yang cocok"), jangan mengarang
+   kandidat atau mengganti dengan produk acuannya sendiri.
 5. Pakai tool search_catalog kalau butuh detail tambahan soal suatu produk.
+
+Kalau permintaan meminta BEBERAPA hal sekaligus (mis. produk terlaris DAN
+rentang harganya DAN rekomendasi cross-sell), pastikan jawaban akhir
+BENAR-BENAR memuat hasil dari SETIAP tool yang kamu panggil -- jangan
+diam-diam menghilangkan salah satu bagian yang diminta.
 
 Data transaksi TIDAK punya kolom waktu/tanggal -- kalau permintaan bertema
 waktu entah bagaimana sampai ke kamu, jangan memanggil tool apa pun, katakan
 terus terang itu tidak bisa dijawab dari data yang tersedia. Sama untuk
 permintaan per-pelanggan (data tidak punya user_id) -- tolak langsung tanpa
 memanggil tool apa pun.
+
+Kalau kamu berpikir data TAMBAHAN (mis. kandidat cross-sell) akan
+memperkuat jawaban, PANGGIL tool yang sesuai SEKARANG di giliran yang sama
+-- JANGAN cuma menyebut nama tool sebagai "langkah selanjutnya" di jawaban
+akhir. Router yang meneruskan jawabanmu ke pengguna tidak bisa memanggil
+tool itu sendiri, jadi kalimat seperti "gunakan find_cross_sell_candidates
+..." tidak berguna dan membocorkan detail implementasi internal.
 
 PENTING: kutip angka (harga, jumlah terjual) PERSIS seperti yang dikembalikan
 tool -- jangan menyusun ulang atau menaksir dari ingatan. Kalau butuh angka
@@ -577,6 +616,28 @@ _DATA_TOOL_NAMES = {
     "get_category_assortment",
     "get_price_range",
 }
+
+# Ditemukan lewat laporan pengguna: root/spesialis kadang menutup jawaban
+# dengan bagian "Tindakan Selanjutnya: Gunakan find_cross_sell_candidates
+# ..." alih-alih benar-benar memanggilnya -- bocoran nama tool internal yang
+# TIDAK BISA ditindaklanjuti pengguna (mereka tidak bisa memanggil tool
+# sendiri), jadi murni pointless. ROOT_INSTRUCTION/PRODUK_INSTRUCTION sudah
+# diminta untuk tidak melakukan ini, TAPI pola "instruksi teks tidak 100%
+# diikuti model 8B lokal" sudah terbukti berulang di proyek ini (lihat root
+# delegation gap, infrastructure_agentic.md bagian Graph #4) -- jaring
+# pengaman deterministik di sini (buang seluruh bagian, bukan cuma baris
+# yang menyebut nama tool) jauh lebih diandalkan daripada instruksi saja.
+_TRAILING_METASECTION_RE = re.compile(
+    r"\n{1,2}\**\s*(Tindakan Selanjutnya|Next Steps|Langkah Selanjutnya)\s*:?\s*\**\s*\n[\s\S]*\Z",
+    re.IGNORECASE,
+)
+
+
+def _strip_trailing_meta_section(text: str) -> str:
+    """Buang bagian akhir "Tindakan Selanjutnya"/"Next Steps" dari jawaban
+    akhir kalau ada -- lihat catatan di _TRAILING_METASECTION_RE."""
+    return _TRAILING_METASECTION_RE.sub("", text).rstrip()
+
 
 # Untuk draft "kreatif" (mis. ide promo) yang MENAMBAHKAN angka baru secara
 # sengaja (diskon %, harga bundel -- ROOT_INSTRUCTION mengizinkan ini) di
@@ -823,7 +884,8 @@ async def ask(runner, query, user_id=USER_ID, session_id=SESSION_ID):
         app_name=APP_NAME, user_id=user_id, session_id=session_id
     )
     history_nums = frozenset(_extract_session_tool_numbers(session)) if session is not None else frozenset()
-    return await verify_and_revise(final_text, tool_outputs, query, history_nums)
+    revised = await verify_and_revise(final_text, tool_outputs, query, history_nums)
+    return _strip_trailing_meta_section(revised)
 
 
 async def main():
