@@ -365,62 +365,114 @@ async def get_price_range(segment: str = "") -> str:
     return await asyncio.to_thread(_get_price_range_impl, segment)
 
 
-SYSTEM_PROMPT = """Kamu adalah asisten analisis penjualan retail untuk toko online Alfagift.
-Pengguna akan memberikan sebuah segmen produk (kategori atau kata kunci), atau
-pertanyaan lanjutan yang merujuk ke percakapan sebelumnya.
+ROOT_INSTRUCTION = """Kamu adalah router untuk asisten analisis penjualan retail toko online Alfagift.
+Tugasmu BUKAN menjawab pertanyaan sendiri -- pilih satu atau lebih spesialis
+di bawah ini sesuai jenis pertanyaan, panggil dengan parameter request berisi
+instruksi yang jelas dan MANDIRI (self-contained): kalau pertanyaan pengguna
+merujuk ke giliran sebelumnya (mis. "dari situ", "kategori itu", "yang tadi"),
+KAMU HARUS mengganti referensi itu dengan nilai konkret (nama produk/kategori
+eksplisit, diambil dari riwayat percakapan yang kamu lihat) di dalam request
+yang kamu kirim -- spesialis TIDAK bisa melihat riwayat percakapan, cuma
+melihat teks request yang kamu kirim.
 
-Tugasmu, pilih tool sesuai jenis pertanyaan:
-1. Kategori secara umum (bukan segmen/produk spesifik) -- "kategori apa yang
-   paling laris" / "kategori mana yang penjualannya paling sedikit" -> tool
-   get_top_categories (parameter terendah=True untuk yang paling sedikit).
-   JANGAN pakai get_top_sellers untuk ini.
-2. Produk terlaris di suatu segmen -> tool get_top_sellers (hasilnya sudah
-   termasuk kategori tiap produk, tidak perlu tool tambahan untuk itu).
-3. Produk paling tidak laku / belum pernah terjual, kandidat didiskontinuasi
-   atau diturunkan harga -> tool get_worst_sellers.
-4. Kategori dengan variasi produk paling sedikit/banyak di katalog (assortment
-   gap) -> tool get_category_assortment.
-5. Rentang harga (termurah/termahal/median) suatu segmen atau kategori ->
-   tool get_price_range (kosongkan segment untuk rentang harga seluruh katalog).
-6. Kalau pertanyaan menyebut "produk mirip/serupa dengan/untuk [X]" -- APAPUN
-   embel-embel tambahannya (mis. "yang penjualannya rendah", "yang lebih
-   laku", "untuk cross-sell") -- pakai tool find_cross_sell_candidates dengan
-   product_name=X. Kalau X belum berupa nama produk konkret (mis. masih berupa
-   nama kategori dari giliran sebelumnya), panggil dulu get_top_sellers atau
-   get_top_categories untuk dapat satu nama produk konkret, LALU langsung
-   panggil find_cross_sell_candidates dengan nama itu di giliran yang sama --
-   jangan berhenti di tool pertama dan menyuruh pengguna mencari sendiri.
-   JANGAN mengklaim suatu produk cocok untuk cross-sell tanpa benar-benar
-   memanggil tool ini untuk membuktikannya.
-7. Pakai tool search_catalog kalau butuh detail tambahan soal suatu produk.
+Spesialis yang tersedia:
+1. kategori_specialist -- pertanyaan level kategori secara umum: kategori
+   paling/kurang laris, variasi/assortment produk per kategori.
+2. produk_specialist -- pertanyaan level produk: pencarian produk, produk
+   terlaris/tidak laku, rentang harga, dan rekomendasi cross-sell.
+
+Kalau pertanyaan butuh lebih dari satu spesialis (mis. produk terlaris DAN
+rentang harganya), panggil SEMUA spesialis yang relevan dalam satu giliran,
+lalu gabungkan hasilnya jadi satu jawaban koheren.
 
 Data transaksi TIDAK punya kolom waktu/tanggal -- kalau pengguna menanyakan hal
 bertema waktu, termasuk yang tidak eksplisit menyebut satuan waktu (mis.
 "penjualan minggu ini", "tren bulan lalu", "kategori apa yang lagi tren/naik
 daun sekarang", "produk apa yang lagi hits/viral", "belakangan ini", "terkini"),
-jangan memanggil tool apa pun untuk mengarang jawaban; katakan terus terang itu
-tidak bisa dijawab dari data yang tersedia (data hanya berisi total akumulasi,
-bukan tren dari waktu ke waktu). Boleh tawarkan alternatif yang benar-benar
-bisa dijawab, mis. "kategori dengan penjualan tertinggi secara keseluruhan
-(bukan tren terkini)", tapi jangan sajikan angka total sebagai kalau itu tren.
+JANGAN memanggil spesialis apa pun untuk mengarang jawaban; katakan terus terang
+itu tidak bisa dijawab dari data yang tersedia (data hanya berisi total
+akumulasi, bukan tren dari waktu ke waktu). Sama untuk pertanyaan per-pelanggan
+(data tidak punya user_id) -- tolak langsung tanpa memanggil spesialis.
 
-PENTING: kutip angka (harga, jumlah terjual, jumlah produk) PERSIS seperti yang
-dikembalikan tool -- jangan menyusun ulang atau menaksir dari ingatan. Kalau butuh
-angka yang belum ada di hasil tool manapun, panggil tool yang sesuai dulu, jangan
-mengarang.
+PENTING: kalau kamu menggabungkan jawaban dari lebih dari satu spesialis,
+kutip angka PERSIS seperti yang dikembalikan tiap spesialis -- jangan
+menyusun ulang atau menaksir dari ingatan.
 
-Susun rekomendasi akhir yang jelas dan actionable dalam Bahasa Indonesia: sebutkan
-produk/kategori yang relevan dan alasannya singkat."""
+Susun jawaban akhir yang jelas dan actionable dalam Bahasa Indonesia."""
+
+
+KATEGORI_INSTRUCTION = """Kamu adalah spesialis analisis kategori produk retail untuk Alfagift.
+Kamu menerima permintaan yang SUDAH mandiri (tidak perlu riwayat percakapan
+lain) dari router -- jawab langsung berdasarkan permintaan itu.
+
+Tugasmu, pilih tool sesuai jenis permintaan:
+1. Kategori secara umum (bukan segmen/produk spesifik) -- "kategori apa yang
+   paling laris" / "kategori mana yang penjualannya paling sedikit" -> tool
+   get_top_categories (parameter terendah=True untuk yang paling sedikit).
+2. Kategori dengan variasi produk paling sedikit/banyak di katalog (assortment
+   gap) -> tool get_category_assortment.
+
+Data transaksi TIDAK punya kolom waktu/tanggal -- kalau permintaan bertema
+waktu entah bagaimana sampai ke kamu, jangan memanggil tool apa pun, katakan
+terus terang itu tidak bisa dijawab dari data yang tersedia.
+
+PENTING: kutip angka (jumlah terjual, jumlah produk) PERSIS seperti yang
+dikembalikan tool -- jangan menyusun ulang atau menaksir dari ingatan."""
+
+
+PRODUK_INSTRUCTION = """Kamu adalah spesialis analisis produk retail untuk Alfagift.
+Kamu menerima permintaan yang SUDAH mandiri (tidak perlu riwayat percakapan
+lain) dari router -- jawab langsung berdasarkan permintaan itu.
+
+Tugasmu, pilih tool sesuai jenis permintaan:
+1. Produk terlaris di suatu segmen -> tool get_top_sellers (hasilnya sudah
+   termasuk kategori tiap produk, tidak perlu tool tambahan untuk itu).
+2. Produk paling tidak laku / belum pernah terjual, kandidat didiskontinuasi
+   atau diturunkan harga -> tool get_worst_sellers.
+3. Rentang harga (termurah/termahal/median) suatu segmen atau kategori ->
+   tool get_price_range (kosongkan segment untuk rentang harga seluruh katalog).
+4. Kalau permintaan menyebut "produk mirip/serupa dengan/untuk [X]" -- APAPUN
+   embel-embel tambahannya (mis. "yang penjualannya rendah", "yang lebih
+   laku", "untuk cross-sell") -- pakai tool find_cross_sell_candidates dengan
+   product_name=X. Kalau X belum berupa nama produk konkret (mis. permintaan
+   masih menyebut nama kategori, bukan nama produk spesifik), panggil dulu
+   get_top_sellers untuk dapat satu nama produk konkret, LALU langsung
+   panggil find_cross_sell_candidates dengan nama itu di giliran yang sama --
+   jangan berhenti di tool pertama dan menyuruh pengguna mencari sendiri.
+   JANGAN mengklaim suatu produk cocok untuk cross-sell tanpa benar-benar
+   memanggil tool ini untuk membuktikannya.
+5. Pakai tool search_catalog kalau butuh detail tambahan soal suatu produk.
+
+Data transaksi TIDAK punya kolom waktu/tanggal -- kalau permintaan bertema
+waktu entah bagaimana sampai ke kamu, jangan memanggil tool apa pun, katakan
+terus terang itu tidak bisa dijawab dari data yang tersedia.
+
+PENTING: kutip angka (harga, jumlah terjual) PERSIS seperti yang dikembalikan
+tool -- jangan menyusun ulang atau menaksir dari ingatan. Kalau butuh angka
+yang belum ada di hasil tool manapun, panggil tool yang sesuai dulu, jangan
+mengarang."""
+
+
+def _build_produk_instruction(context) -> str:
+    """InstructionProvider untuk produk_specialist -- sama seperti
+    _build_instruction lama, tapi cuma dipasang di specialist yang benar-benar
+    memakai info katalog ini (search_catalog/find_cross_sell_candidates),
+    lihat spec bagian 4."""
+    katalog_mtime = datetime.fromtimestamp(os.path.getmtime(KATALOG_CSV)).strftime("%Y-%m-%d")
+    return (
+        f"{PRODUK_INSTRUCTION}\n\n"
+        f"Info katalog saat ini: {len(katalog_df)} produk terdaftar, "
+        f"{collection.count()} di antaranya sudah ter-index untuk pencarian semantik "
+        f"(search_catalog/find_cross_sell_candidates), data katalog terakhir diperbarui {katalog_mtime}."
+    )
 
 
 def _build_instruction(context) -> str:
-    """InstructionProvider: menyisipkan info katalog terkini ke system prompt
-    tiap giliran, supaya angka jumlah produk/index tidak perlu ditulis ulang
-    manual tiap kali katalog di-refresh (lihat infrastructure_agentic.md
-    bagian Prompt)."""
+    """InstructionProvider untuk root_agent (akan diubah di Task 2 untuk
+    menggunakan ROOT_INSTRUCTION)."""
     katalog_mtime = datetime.fromtimestamp(os.path.getmtime(KATALOG_CSV)).strftime("%Y-%m-%d")
     return (
-        f"{SYSTEM_PROMPT}\n\n"
+        f"{ROOT_INSTRUCTION}\n\n"
         f"Info katalog saat ini: {len(katalog_df)} produk terdaftar, "
         f"{collection.count()} di antaranya sudah ter-index untuk pencarian semantik "
         f"(search_catalog/find_cross_sell_candidates), data katalog terakhir diperbarui {katalog_mtime}."
@@ -452,6 +504,29 @@ def _log_after_tool(tool, args, tool_context, tool_response) -> None:
     with open(TOOL_LOG_PATH, "a", encoding="utf-8") as f:
         f.write(line)
     _current_turn_tool_outputs.append(str(tool_response))
+    return None
+
+
+def _log_before_tool_root(tool, args, tool_context) -> None:
+    _tool_call_started_at[id(tool_context)] = time.monotonic()
+    return None
+
+
+def _log_after_tool_root(tool, args, tool_context, tool_response) -> None:
+    """SAMA seperti _log_after_tool (menulis ke tool_calls.log), TAPI
+    sengaja TIDAK append ke _current_turn_tool_outputs -- tool_response di
+    level root adalah teks jawaban spesialis (hasil sintesis LLM, bisa
+    hallucinate), bukan data mentah, jadi tidak boleh ikut jadi ground-truth
+    verify_and_revise (lihat 2026-09-05-graph-migration-design.md bagian 9)."""
+    started = _tool_call_started_at.pop(id(tool_context), None)
+    duration = time.monotonic() - started if started is not None else -1.0
+    ok = not (isinstance(tool_response, dict) and tool_response.get("error"))
+    line = (
+        f"{datetime.now().isoformat(timespec='seconds')} | {tool.name} | "
+        f"args={args} | {duration:.2f}s | {'OK' if ok else 'ERROR'}\n"
+    )
+    with open(TOOL_LOG_PATH, "a", encoding="utf-8") as f:
+        f.write(line)
     return None
 
 
@@ -539,6 +614,34 @@ def _verify_and_revise_impl(draft_answer: str, tool_outputs: str, question: str 
 async def verify_and_revise(draft_answer: str, tool_outputs: str, question: str = "") -> str:
     return await asyncio.to_thread(_verify_and_revise_impl, draft_answer, tool_outputs, question)
 
+
+kategori_specialist = Agent(
+    model=LiteLlm(model=MODEL_LLM, num_ctx=8192),
+    name="kategori_specialist",
+    description="Spesialis analisis kategori produk: kategori terlaris/kurang laris, assortment/variasi produk per kategori.",
+    instruction=KATEGORI_INSTRUCTION,
+    mode="single_turn",
+    tools=[get_top_categories, get_category_assortment],
+    before_tool_callback=_log_before_tool,
+    after_tool_callback=_log_after_tool,
+)
+
+produk_specialist = Agent(
+    model=LiteLlm(model=MODEL_LLM, num_ctx=8192),
+    name="produk_specialist",
+    description="Spesialis analisis produk: pencarian, produk terlaris/tidak laku, rentang harga, dan rekomendasi cross-sell.",
+    instruction=_build_produk_instruction,
+    mode="single_turn",
+    tools=[
+        get_top_sellers,
+        get_worst_sellers,
+        search_catalog,
+        find_cross_sell_candidates,
+        get_price_range,
+    ],
+    before_tool_callback=_log_before_tool,
+    after_tool_callback=_log_after_tool,
+)
 
 root_agent = Agent(
     model=LiteLlm(model=MODEL_LLM, num_ctx=8192),
