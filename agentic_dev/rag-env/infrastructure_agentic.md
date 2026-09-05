@@ -30,11 +30,17 @@ sumber yang ter-install di `Lib/site-packages/google/adk/` pada venv ini
 > melambat, kurang `context_cache_config`), dan satu sampel dropout sintesis
 > cross-sell di kasus compound paling berat (CP01, 1/4 sampel independen).
 > Isu keempat ditemukan BELAKANGAN lewat pengujian interaktif pengguna
-> (bukan dari 104 kasus regresi) DAN SUDAH diperbaiki: root melewati
-> delegasi sama sekali untuk permintaan bergaya "buatkan rekomendasi promo"
-> -- jawaban lancar tapi nol tool dipanggil, jadi kemungkinan besar dikarang.
-> Diperbaiki lewat paragraf baru di `ROOT_INSTRUCTION` yang menutup celah
-> framing kreatif/strategis. Lihat bagian 5 untuk detail keempatnya.
+> (bukan dari 104 kasus regresi): root melewati delegasi sama sekali untuk
+> permintaan bergaya "buatkan rekomendasi promo" -- jawaban lancar tapi nol
+> tool dipanggil, jadi kemungkinan besar dikarang. Perbaikan prompt-only
+> (`ROOT_INSTRUCTION`) TERBUKTI tidak cukup (bug kambuh lagi di pertanyaan
+> identik) -- percobaan memaksa tool-call di level API (`tool_choice`) juga
+> GAGAL TOTAL karena LiteLLM membuang parameter itu untuk provider
+> `ollama_chat`. Jaring pengaman deterministik SUDAH dipasang di
+> `verify_and_revise()` (menolak draft yang menyebut banyak angka konkret
+> padahal nol tool dipanggil), tapi ini mencegah fabrikasi terkirim ke
+> pengguna, BUKAN membuat root otomatis mengambil data yang benar. Lihat
+> bagian 5 untuk kronologi lengkap ketiga percobaan.
 
 | Lapisan | Status | Implementasi saat ini |
 |---|---|---|
@@ -42,7 +48,7 @@ sumber yang ter-install di `Lib/site-packages/google/adk/` pada venv ini
 | **Context** | Sebagian | RAG (ChromaDB) + data terstruktur (pandas) + sesi persisten (`SqliteSessionService` -> `agent_sessions.db`) ada; memori semantik lintas-sesi belum -- **menunggu keputusan scoping** (lihat bagian Context: desain sesi tunggal-abadi saat ini tidak cocok langsung dengan API `BaseMemoryService` yang berbasis multi-sesi) |
 | **Harness** | Ada | `google-adk` (`Agent` + `Runner` + `LiteLlm` -> Ollama) + `before_tool_callback`/`after_tool_callback` -> `tool_calls.log` + `test_agent_cases.py` (104 kasus regresi otomatis) |
 | **Loop** | Ada | Tool-calling loop (ReAct-style) dari ADK + retry sekali untuk embedding Ollama + `verify_and_revise()` (loop verifikasi akurasi hybrid, dipilih lewat benchmark nyata) |
-| **Graph** | **Bagian 1 & 2 diimplementasikan, 3 isu diketahui belum diperbaiki + 1 isu ditemukan & diperbaiki** | Root router (`tools=[]`) + `kategori_specialist` + `produk_specialist`, plus `verify_and_revise()` untuk Bagian 2 -- diverifikasi lewat smoke test live + regresi 104-kasus, lihat bagian 5 untuk detail, ketiga isu terbuka (PR04, latensi suite-wide, dropout sintesis cross-sell CP01), dan isu keempat (root melewati delegasi untuk framing "rekomendasi promo", ditemukan pasca-implementasi, sudah diperbaiki) |
+| **Graph** | **Bagian 1 & 2 diimplementasikan, 3 isu diketahui belum diperbaiki + 1 isu dimitigasi (jaring pengaman, bukan fix tunggal)** | Root router (`tools=[]`) + `kategori_specialist` + `produk_specialist`, plus `verify_and_revise()` untuk Bagian 2 -- diverifikasi lewat smoke test live + regresi 104-kasus, lihat bagian 5 untuk detail, ketiga isu terbuka (PR04, latensi suite-wide, dropout sintesis cross-sell CP01), dan isu keempat (root melewati delegasi untuk framing "rekomendasi promo" -- prompt-only fix TERBUKTI tidak cukup, forcing via API TERBUKTI tidak didukung Ollama/LiteLLM, jaring pengaman deterministik dipasang di `verify_and_revise()`) |
 
 Baris ini dulu (sebelum migrasi) berbunyi "**Graph** benar-benar belum
 tersentuh sama sekali" -- sudah tidak berlaku lagi, lihat bagian 5.
@@ -613,46 +619,73 @@ interaktif pengguna dan SUDAH diperbaiki, ada di bawah nomor 4):
    cuma mismatch angka.
 4. **Root melewati delegasi untuk permintaan bergaya kreatif/strategis
    (ditemukan pasca-implementasi lewat pengujian interaktif pengguna,
-   SUDAH DIPERBAIKI):** pengguna menjalankan sesi interaktif (`python
-   query.py`) dan bertanya "berikan aku 5 rekomendasi promo yang bisa di
-   buat berdasarkan 5 product terlaris". Root menjawab lancar dengan nama
-   produk, persentase diskon, dan harga bundel spesifik -- TANPA memanggil
-   satu tool pun. Dikonfirmasi lewat `tool_calls.log`: baris terakhir
-   sebelum giliran ini adalah dari regresi Task 7 (18:58), giliran
-   pengguna berlangsung 21:33, lebih dari 2.5 jam tanpa baris baru sama
-   sekali -- bukti langsung nol tool call. Artinya seluruh detail konkret
-   di jawaban itu (produk mana yang terlaris, harga, diskon) kemungkinan
-   besar dikarang, bukan diambil dari data nyata. Gap ini tidak tercakup
-   satupun dari 104 kasus regresi karena semuanya berupa lookup literal
-   ("produk terlaris kategori X"), bukan permintaan "buatkan
-   ide/rekomendasi" yang framing-nya terdengar seperti opini padahal
-   tetap bergantung pada fakta penjualan konkret. **Akar masalah:**
-   `ROOT_INSTRUCTION` tidak punya aturan eksplisit untuk pola ini -- baris
-   pembuka instruksi sudah bilang "Tugasmu BUKAN menjawab pertanyaan
-   sendiri", tapi root tetap menafsirkan framing "buatkan rekomendasi
-   promo" sebagai kekecualian yang boleh dijawab sendiri. **Perbaikan:**
-   tambah paragraf baru di `ROOT_INSTRUCTION` (`query.py`) yang eksplisit
-   menyatakan framing kreatif/strategis BUKAN alasan melewati spesialis
-   kalau jawabannya akan menyebut produk/kategori/angka penjualan/harga
-   tertentu -- root WAJIB memanggil spesialis dulu untuk fakta itu, baru
-   menyusun ide di atasnya, dan bagian saran murni (mis. persentase
-   diskon promo) harus ditandai eksplisit sebagai saran, bukan data
-   sistem. **Diverifikasi ulang** dengan pertanyaan identik: root sekarang
-   memanggil `produk_specialist` (yang lalu memanggil `get_top_sellers`
-   untuk beberapa segmen: minuman, makanan, kebutuhan dapur) dan
-   `kategori_specialist`, lalu menyusun 5 ide promo di atas produk/harga/
-   angka-terjual NYATA dari tool -- bukan lagi dikarang murni. Catatan
-   jujur: `verify_and_revise()` tetap mencatat "MASIH MISMATCH" pada
-   giliran ini karena beberapa angka di jawaban akhir adalah hasil
-   aritmatika dari angka tool asli (mis. total harga bundel setelah
-   diskon) yang tidak match persis dengan angka mentah manapun -- ini
-   ekspektasi wajar dari cara kerja checker (bandingkan set angka literal,
-   bukan validasi aritmatika), BUKAN bug baru, dan tidak mengubah
-   kesimpulan bahwa fix ini berhasil (produk/harga/angka-terjual dasarnya
-   sendiri sekarang nyata, bukan dikarang). Belum ditambahkan sebagai
-   kasus regresi permanen di `test_agent_cases.py` -- kandidat tindak
-   lanjut kalau pola serupa ("buatkan ide/rekomendasi berdasar data")
-   muncul lagi di kasus lain.
+   MITIGASI BERLAPIS -- bukan satu fix tunggal, lihat kronologi di
+   bawah):** pengguna menjalankan sesi interaktif (`python query.py`) dan
+   bertanya "berikan aku 5 rekomendasi promo yang bisa di buat berdasarkan
+   5 product terlaris". Root menjawab lancar dengan nama produk,
+   persentase diskon, dan harga bundel spesifik -- TANPA memanggil satu
+   tool pun. Dikonfirmasi lewat `tool_calls.log`: giliran itu nol baris
+   baru sama sekali. Gap ini tidak tercakup satupun dari 104 kasus regresi
+   karena semuanya berupa lookup literal, bukan permintaan "buatkan
+   ide/rekomendasi" yang framing-nya terdengar seperti opini padahal tetap
+   bergantung pada fakta penjualan konkret.
+   - **Percobaan 1 (prompt-only):** tambah paragraf di `ROOT_INSTRUCTION`
+     yang eksplisit menyatakan framing kreatif/strategis BUKAN alasan
+     melewati spesialis. Diverifikasi ulang sekali dan BERHASIL saat itu
+     (root memanggil `produk_specialist`+`kategori_specialist`, jawaban
+     pakai data nyata) -- TAPI pengguna mengulang pertanyaan yang SAMA
+     PERSIS di sesi lain dan tetap dapat nol-tool-call lagi. Kesimpulan
+     jujur: instruksi teks MENGURANGI tapi tidak MENGHILANGKAN masalah --
+     model 8B lokal (kuantisasi) tidak 100% konsisten mengikuti instruksi
+     teks, beda percobaan beda hasil untuk pertanyaan identik.
+   - **Percobaan 2 (paksa di level API, GAGAL TOTAL -- didokumentasikan
+     supaya tidak diulang):** coba paksa root SELALU memanggil tool di
+     panggilan model pertama tiap giliran lewat
+     `before_model_callback` (`FunctionCallingConfig.mode=ANY`, dikembalikan
+     ke `AUTO` setelah minimal satu spesialis membalas, dideteksi dari
+     `function_response` di riwayat sejak pesan user terakhir). Diverifikasi
+     dua kasus (permintaan promo + penolakan tema-waktu) -- kasus promo
+     tampak berhasil (2x `produk_specialist` terpanggil), TAPI kasus
+     penolakan tema-waktu TETAP nol tool call padahal seharusnya dipaksa.
+     Investigasi punya akar masalah: `litellm/llms/ollama/chat/transformation.py:186`
+     secara eksplisit MEMBUANG parameter `tool_choice` untuk provider
+     `ollama_chat` (komentar sumbernya sendiri: "causes ollama requests to
+     hang") -- jadi `tool_choice="required"` yang dikirim ADK TIDAK PERNAH
+     sampai ke Ollama. Keberhasilan kasus promo di percobaan ini murni
+     kebetulan (efek residual Percobaan 1, bukan efek forcing-nya).
+     **Kode `before_model_callback` ini SUDAH DIHAPUS** dari `query.py` --
+     dead code yang tidak melakukan apa pun di stack Ollama, menyesatkan
+     kalau dibiarkan.
+   - **Perbaikan aktual, deterministik (SUDAH DIPASANG):** karena
+     forcing di level API terbukti tidak tersedia untuk stack ini, jaring
+     pengaman dipasang di `_verify_and_revise_impl()` (bukan di
+     `ROOT_INSTRUCTION`): kalau NOL tool dipanggil giliran ini (`tool_outputs`
+     kosong) DAN draft jawaban tetap menyebut >= 3 angka konkret yang bukan
+     dari pertanyaan pengguna sendiri (`_SUSPICIOUS_NUM_THRESHOLD`), draft
+     itu DITOLAK dan diganti pesan jujur ("saya belum mengambil data
+     penjualan... coba tanya lebih eksplisit") alih-alih dikirim apa
+     adanya ke pengguna. Penolakan sah (tema waktu/per-pelanggan) TIDAK
+     kena jaring ini karena secara alami tidak pernah menyebut angka
+     konkret sama sekali (0 angka asing, di bawah ambang 3). Diverifikasi
+     langsung (unit-level, tanpa model live) dengan draft palsu asli dari
+     laporan pengguna (5 promo Lifebuoy/Biore/Lux dengan harga & diskon
+     karangan) -- DITOLAK sebagaimana mestinya -- dan dengan draft
+     penolakan tema-waktu asli -- LOLOS tanpa perubahan sebagaimana
+     mestinya. Sekalian menutup gap terkait: penolakan per-pelanggan
+     (data tidak punya user_id) sebelumnya cuma ada di `ROOT_INSTRUCTION`,
+     sekarang diulang juga di `KATEGORI_INSTRUCTION`/`PRODUK_INSTRUCTION`
+     supaya spesialis yang menerima pertanyaan begini (mis. kalau router
+     salah rute) juga tahu untuk menolak, bukan mengarang.
+   - **Trade-off yang jujur:** jaring pengaman ini TIDAK membuat root
+     otomatis mengambil data yang benar dalam satu giliran yang sama --
+     kalau fabrikasi terdeteksi, pengguna dapat pesan "coba tanya lebih
+     eksplisit", bukan jawaban lengkap. Ini deliberately dipilih karena
+     lebih aman (tidak pernah diam-diam mengirim data karangan) daripada
+     mencoba auto-retry yang menambah kerumitan tanpa jaminan berhasil.
+     Kandidat tindak lanjut kalau ingin auto-retry: ulangi giliran yang
+     sama dengan pesan susulan eksplisit menyuruh memanggil spesialis,
+     tapi ini menambah 1 giliran ke riwayat sesi permanen (`agent_sessions.db`)
+     -- belum diprioritaskan.
 
 Detail lengkap ada di `2026-09-05-graph-migration-design.md` (spec) dan
 `2026-09-05-graph-migration-plan.md` (rencana implementasi per-task) --
