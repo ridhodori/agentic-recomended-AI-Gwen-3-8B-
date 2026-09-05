@@ -22,11 +22,15 @@ data untuk memberi rekomendasi bisnis, bukan sekadar menjawab pertanyaan produk:
 
 1. Pengguna memasukkan sebuah **segmen produk** (kategori/kata kunci, mis. "sabun mandi"),
    atau pertanyaan lanjutan yang merujuk ke percakapan sebelumnya.
-2. Model (`qwen3-agent:latest`, dijalankan via ADK `LiteLlm` -> Ollama) memanggil tool
-   yang sesuai dengan jenis pertanyaan: produk/kategori terlaris atau paling tidak
-   laku, kesenjangan variasi produk per kategori, rentang harga suatu segmen, atau
-   produk mirip berpenjualan rendah sebagai kandidat cross-sell. Daftar lengkap ada
-   di bagian [Tools yang Tersedia](#tools-yang-tersedia) di bawah.
+2. `root_agent` (`qwen3-agent:latest` via ADK `LiteLlm` -> Ollama) tidak punya tool
+   sendiri -- tugasnya cuma merutekan pertanyaan ke salah satu spesialis
+   (`kategori_specialist` atau `produk_specialist`), yang baru memanggil tool
+   yang sesuai: produk/kategori terlaris atau paling tidak laku, kesenjangan
+   variasi produk per kategori, rentang harga suatu segmen, atau produk mirip
+   berpenjualan rendah sebagai kandidat cross-sell. Daftar lengkap tool ada di
+   bagian [Tools yang Tersedia](#tools-yang-tersedia) di bawah; pengelompokan
+   router+spesialis (hasil migrasi Graph) ada di `infrastructure_agentic.md`
+   bagian Graph.
 3. Model menyusun rekomendasi akhir: temuan yang relevan dan alasannya.
 
 **Kenapa ADK, bukan loop manual:** ADK's `Runner` + `InMemorySessionService`
@@ -36,7 +40,11 @@ sebelumnya tanpa perlu tool dipanggil ulang. Loop manual sebelumnya tidak
 punya mekanisme ini (single-shot: satu segmen, satu jawaban, keluar).
 Tools-nya sendiri tetap fungsi Python biasa dengan Google-style docstring -- ADK
 yang otomatis mengubahnya jadi tool schema. Jumlahnya sudah bertambah sejak migrasi
-awal (lihat [Tools yang Tersedia](#tools-yang-tersedia)); mekanismenya tidak berubah.
+awal (lihat [Tools yang Tersedia](#tools-yang-tersedia)); mekanismenya tidak berubah,
+tapi sejak migrasi Graph tool-nya sekarang dibagi ke 2 spesialis
+(`kategori_specialist`, `produk_specialist`) di balik `root_agent` router, bukan
+satu agent datar yang memegang semuanya -- lihat `infrastructure_agentic.md`
+bagian Graph untuk detail arsitektur dan status verifikasinya.
 
 Implementasi lengkap ada di [`query.py`](query.py).
 
@@ -85,7 +93,7 @@ D:\agentic\
 │   ├── aggregate_sales.py         # agregasi transaction_data.csv -> kolom "terjual" di katalog
 │   ├── build_index.py             # index katalog_produk.csv (+terjual) ke ChromaDB
 │   ├── query.py                   # agen tool-calling: segmen -> rekomendasi
-│   ├── test_agent_cases.py        # 104 kasus uji regresi thd root_agent, lihat PANDUAN_PENGGUNAAN.md
+│   ├── test_agent_cases.py        # 104 kasus uji regresi thd root_agent (router + 2 spesialis sejak migrasi Graph, lihat infrastructure_agentic.md bagian Graph), lihat PANDUAN_PENGGUNAAN.md
 │   ├── test_report.jsonl          # hasil run test_agent_cases.py terakhir (per-kasus, JSON lines)
 │   ├── benchmark_verify_loop.py   # ukur biaya programatik vs LoopAgent vs hybrid utk loop verifikasi -- lihat infrastructure_agentic.md bagian Graph #Bagian 2
 │   ├── tool_calls.log             # log tiap panggilan tool: nama, argumen, durasi, status
@@ -198,13 +206,13 @@ konteks percakapan (rekomendasi sebelumnya) tetap diingat.
 ## TODO — Lanjutan
 
 - [x] Verifikasi `qwen3-agent:latest` mendukung tool-calling (`capabilities: ["completion","tools","thinking"]` dari `/api/tags`)
-- [x] Tambah agentic tool-calling layer -- sekarang 7 tool, lihat [Tools yang Tersedia](#tools-yang-tersedia)
+- [x] Tambah agentic tool-calling layer -- sekarang 7 tool, dipecah jadi 2 spesialis (`kategori_specialist`, `produk_specialist`) di balik `root_agent` router (migrasi Graph Bagian 1, lihat `infrastructure_agentic.md` bagian Graph), lihat [Tools yang Tersedia](#tools-yang-tersedia) untuk daftar lengkap tool
 - [x] Migrasi ke `google-adk` untuk session state (percakapan multi-turn dalam satu run)
 - [x] Bungkus semua tool jadi `async` + `asyncio.to_thread` supaya tidak memblok event loop (lihat Known Issues soal `LoggingWorker` timeout)
 - [x] Sesi persisten lintas-restart lewat `SqliteSessionService` (`agent_sessions.db`), ganti `InMemorySessionService`
 - [x] Observability minimal: `before_tool_callback`/`after_tool_callback` mencatat tiap panggilan tool ke `tool_calls.log`
 - [x] Uji regresi otomatis: `test_agent_cases.py` (104 kasus/107 giliran), lihat `PANDUAN_PENGGUNAAN.md`
-- [x] Instruksi dinamis: `_build_instruction()` (`InstructionProvider`) menyisipkan jumlah produk/index/tanggal update ke system prompt tiap giliran
+- [x] Instruksi dinamis: `_build_produk_instruction()` (`InstructionProvider`, **REVISI setelah migrasi Graph:** dulu `_build_instruction()` dipasang di satu-satunya root agent, sekarang dipasang hanya di `produk_specialist`) menyisipkan jumlah produk/index/tanggal update ke instruksinya tiap giliran
 - [x] Retry sekali untuk panggilan embedding Ollama yang transient-fail (`_embed()` di `query.py`)
 - [x] Loop verifikasi akurasi jawaban akhir vs. data tool -- `verify_and_revise()` di `query.py` (opsi hybrid, dipilih lewat benchmark nyata di `benchmark_verify_loop.py`, lihat `infrastructure_agentic.md` bagian Graph #Bagian 2 untuk angka lengkap)
 - [ ] `get_user_history()` -- **tidak bisa dibangun** dari `transaction_data.csv` saat ini (tidak ada user_id/timestamp). Perlu sumber data baru kalau personalisasi per-user tetap diinginkan.
