@@ -7,9 +7,12 @@ ini sekarang jadi **arsip riwayat desain** untuk migrasi yang sudah
 diimplementasikan -- status terkini yang otoritatif (termasuk 3 isu terbuka
 yang diketahui: regresi routing PR04, regresi latensi suite-wide, dropout
 sintesis cross-sell CP01; plus isu keempat yang ditemukan pasca-implementasi
-lewat pengujian interaktif pengguna dan SUDAH diperbaiki: root melewati
-delegasi untuk permintaan bergaya "buatkan rekomendasi promo") ada di
-`infrastructure_agentic.md` bagian 5, TIDAK diduplikasi di sini. Ditulis setelah Bagian 1 & 2 dari desain Graph
+lewat pengujian interaktif pengguna: root melewati delegasi untuk permintaan
+bergaya "buatkan rekomendasi promo" -- prompt-only fix TERBUKTI tidak cukup,
+forcing tool-call di level API JUGA TERBUKTI tidak didukung provider
+`ollama_chat` LiteLLM, jaring pengaman deterministik akhirnya dipasang di
+`verify_and_revise()`) ada di `infrastructure_agentic.md` bagian 5, TIDAK
+diduplikasi di sini. Ditulis setelah Bagian 1 & 2 dari desain Graph
 dikonfirmasi di `infrastructure_agentic.md` bagian 5 -- dokumen ini adalah
 spec detail untuk Bagian 1 (Bagian 2, loop verifikasi akurasi, sudah selesai
 diimplementasikan terpisah, lihat `verify_and_revise()` di `query.py`).

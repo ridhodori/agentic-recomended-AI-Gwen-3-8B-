@@ -426,7 +426,9 @@ Tugasmu, pilih tool sesuai jenis permintaan:
 
 Data transaksi TIDAK punya kolom waktu/tanggal -- kalau permintaan bertema
 waktu entah bagaimana sampai ke kamu, jangan memanggil tool apa pun, katakan
-terus terang itu tidak bisa dijawab dari data yang tersedia.
+terus terang itu tidak bisa dijawab dari data yang tersedia. Sama untuk
+permintaan per-pelanggan (data tidak punya user_id) -- tolak langsung tanpa
+memanggil tool apa pun.
 
 PENTING: kutip angka (jumlah terjual, jumlah produk) PERSIS seperti yang
 dikembalikan tool -- jangan menyusun ulang atau menaksir dari ingatan."""
@@ -457,7 +459,9 @@ Tugasmu, pilih tool sesuai jenis permintaan:
 
 Data transaksi TIDAK punya kolom waktu/tanggal -- kalau permintaan bertema
 waktu entah bagaimana sampai ke kamu, jangan memanggil tool apa pun, katakan
-terus terang itu tidak bisa dijawab dari data yang tersedia.
+terus terang itu tidak bisa dijawab dari data yang tersedia. Sama untuk
+permintaan per-pelanggan (data tidak punya user_id) -- tolak langsung tanpa
+memanggil tool apa pun.
 
 PENTING: kutip angka (harga, jumlah terjual) PERSIS seperti yang dikembalikan
 tool -- jangan menyusun ulang atau menaksir dari ingatan. Kalau butuh angka
@@ -544,6 +548,16 @@ def _extract_numbers(text: str) -> set[str]:
     return {n.replace(".", "").replace(",", "") for n in _NUM_RE.findall(text)}
 
 
+# Ambang jumlah angka konkret "asing" (bukan dari pertanyaan pengguna) yang
+# dianggap mencurigakan kalau NOL tool dipanggil giliran ini -- penolakan sah
+# (tema waktu/per-pelanggan) tidak pernah menyebut angka spesifik sama
+# sekali, sedangkan draft yang dikarang (lihat kasus nyata di
+# infrastructure_agentic.md bagian Graph) menyebut belasan-puluhan angka
+# (harga, persentase, jumlah terjual). 3 dipilih sebagai batas aman yang
+# jelas di atas nol tapi jelas di bawah pola fabrikasi nyata yang teramati.
+_SUSPICIOUS_NUM_THRESHOLD = 3
+
+
 def _verify_and_revise_impl(draft_answer: str, tool_outputs: str, question: str = "") -> str:
     """Loop verifikasi akurasi (Graph Bagian 2, hybrid) -- lihat
     infrastructure_agentic.md untuk benchmark & alasan pemilihan opsi ini.
@@ -557,7 +571,37 @@ def _verify_and_revise_impl(draft_answer: str, tool_outputs: str, question: str 
     "cocok untuk cross-sell", yang tidak bisa dicek programatik).
     """
     if not tool_outputs.strip():
-        return draft_answer  # tidak ada tool dipanggil giliran ini -- tidak ada yang bisa diverifikasi
+        # Nol tool dipanggil giliran ini -- BISA berarti penolakan sah (tema
+        # waktu/per-pelanggan, root ATAU spesialis menolak tanpa data, lihat
+        # ROOT_INSTRUCTION/KATEGORI_INSTRUCTION/PRODUK_INSTRUCTION), yang
+        # TIDAK menyebut angka konkret apa pun. TAPI ditemukan lewat laporan
+        # pengguna langsung: kadang root malah menjawab kreatif dari ingatan
+        # sendiri (mis. "buatkan 5 ide promo") dan menyebut banyak angka
+        # (harga, persentase diskon, jumlah terjual) yang jelas bukan dari
+        # data nyata karena tidak ada satu tool pun dipanggil -- pola
+        # fabrikasi yang beda dari penolakan sah lewat jumlah angka
+        # konkretnya (penolakan sah ~0 angka, fabrikasi puluhan). Cek
+        # tool_choice="required" di level API TERBUKTI tidak bisa dipakai di
+        # sini (LiteLLM membuang tool_choice untuk provider ollama_chat,
+        # lihat litellm/llms/ollama/chat/transformation.py:186, komentarnya
+        # sendiri "causes ollama requests to hang") -- jadi ini satu-satunya
+        # jaring pengaman yang bisa dipasang tanpa akses tool asli di sini.
+        suspicious_nums = _extract_numbers(draft_answer) - _extract_numbers(question)
+        if len(suspicious_nums) < _SUSPICIOUS_NUM_THRESHOLD:
+            return draft_answer  # penolakan sah / tidak ada angka konkret asing -- tidak ada yang perlu diverifikasi
+        with open(TOOL_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(
+                f"NOTE {datetime.now().isoformat(timespec='seconds')} | verify_and_revise | "
+                f"NOL TOOL DIPANGGIL tapi draft menyebut {len(suspicious_nums)} angka konkret asing "
+                f"-- kemungkinan dikarang, draft ditolak: {suspicious_nums}\n"
+            )
+        return (
+            "Saya belum benar-benar mengambil data penjualan untuk pertanyaan ini "
+            "(tidak ada tool yang terpanggil), jadi saya tidak mau memberi angka atau "
+            "nama produk spesifik yang berisiko dikarang. Coba tanya lebih eksplisit, "
+            "misalnya \"ambil dulu 5 produk terlaris, baru buatkan ide promo untuk "
+            "masing-masing\", supaya data aslinya benar-benar diambil dulu."
+        )
 
     draft_nums = _extract_numbers(draft_answer)
     tool_nums = _extract_numbers(tool_outputs)
