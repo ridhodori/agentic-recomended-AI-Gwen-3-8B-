@@ -16,3 +16,6 @@ test_run_stdout.log
 
 # Tool-specific local config
 .claude/
+
+# Local git worktrees (scratch, not tracked)
+.worktrees/
