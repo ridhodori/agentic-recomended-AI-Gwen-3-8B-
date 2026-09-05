@@ -24,17 +24,20 @@ sumber yang ter-install di `Lib/site-packages/google/adk/` pada venv ini
 > bagian 5) -- root sekarang pure router (`tools=[]`,
 > `sub_agents=[kategori_specialist, produk_specialist]`), diverifikasi
 > lewat smoke test live dan regresi penuh 104-kasus (0 error baru), TAPI
-> dua isu diketahui masih belum diperbaiki: regresi routing PR04 (1/104)
-> dan regresi latensi kasus compound (117%-773%, kurang
-> `context_cache_config`) -- lihat bagian 5 untuk detail.
+> tiga isu diketahui masih belum diperbaiki: regresi routing PR04 (1/104),
+> regresi latensi yang ternyata **suite-wide** (bukan cuma kasus compound --
+> total waktu suite 104-kasus +318%, median per-kasus +218%, 100/104 kasus
+> melambat, kurang `context_cache_config`), dan satu sampel dropout sintesis
+> cross-sell di kasus compound paling berat (CP01, 1/4 sampel independen) --
+> lihat bagian 5 untuk detail ketiganya.
 
 | Lapisan | Status | Implementasi saat ini |
 |---|---|---|
-| **Prompt** | Ada | `_build_instruction()` (InstructionProvider) di `query.py` -- system prompt statis + info katalog dinamis (jumlah produk, jumlah ter-index, tanggal update) tiap giliran |
+| **Prompt** | Ada | 3 konstanta instruksi terpisah di `query.py` -- `ROOT_INSTRUCTION` (router, statis), `KATEGORI_INSTRUCTION` (statis), dan `PRODUK_INSTRUCTION` lewat `_build_produk_instruction()` (InstructionProvider, menyisipkan info katalog dinamis: jumlah produk, jumlah ter-index, tanggal update) tiap giliran -- lihat bagian 1 dan bagian 5 untuk detail split root/spesialis |
 | **Context** | Sebagian | RAG (ChromaDB) + data terstruktur (pandas) + sesi persisten (`SqliteSessionService` -> `agent_sessions.db`) ada; memori semantik lintas-sesi belum -- **menunggu keputusan scoping** (lihat bagian Context: desain sesi tunggal-abadi saat ini tidak cocok langsung dengan API `BaseMemoryService` yang berbasis multi-sesi) |
 | **Harness** | Ada | `google-adk` (`Agent` + `Runner` + `LiteLlm` -> Ollama) + `before_tool_callback`/`after_tool_callback` -> `tool_calls.log` + `test_agent_cases.py` (104 kasus regresi otomatis) |
 | **Loop** | Ada | Tool-calling loop (ReAct-style) dari ADK + retry sekali untuk embedding Ollama + `verify_and_revise()` (loop verifikasi akurasi hybrid, dipilih lewat benchmark nyata) |
-| **Graph** | **Bagian 1 & 2 diimplementasikan, 2 isu diketahui belum diperbaiki** | Root router (`tools=[]`) + `kategori_specialist` + `produk_specialist`, plus `verify_and_revise()` untuk Bagian 2 -- diverifikasi lewat smoke test live + regresi 104-kasus, lihat bagian 5 untuk detail dan kedua isu terbuka (PR04, latensi compound) |
+| **Graph** | **Bagian 1 & 2 diimplementasikan, 3 isu diketahui belum diperbaiki** | Root router (`tools=[]`) + `kategori_specialist` + `produk_specialist`, plus `verify_and_revise()` untuk Bagian 2 -- diverifikasi lewat smoke test live + regresi 104-kasus, lihat bagian 5 untuk detail dan ketiga isu terbuka (PR04, latensi suite-wide, dropout sintesis cross-sell CP01) |
 
 Baris ini dulu (sebelum migrasi) berbunyi "**Graph** benar-benar belum
 tersentuh sama sekali" -- sudah tidak berlaku lagi, lihat bagian 5.
@@ -55,32 +58,53 @@ di bagian Graph di bawah.
 model, terpisah dari input pengguna per-giliran.
 
 **Yang sudah ada:**
-- `SYSTEM_PROMPT` di `query.py` (string statis, ~30 baris) -- daftar 7 tool
-  dan kapan masing-masing dipakai, plus larangan menjawab pertanyaan
-  bertema waktu.
+- **REVISI, lihat bagian Graph #5:** dulu satu `SYSTEM_PROMPT` statis
+  (~30 baris, daftar 7 tool dan kapan masing-masing dipakai, plus larangan
+  menjawab pertanyaan bertema waktu) -- konstanta itu sudah DIHAPUS oleh
+  migrasi Graph. Sekarang ada 3 konstanta instruksi terpisah di `query.py`:
+  `ROOT_INSTRUCTION` (router -- pilih spesialis mana yang relevan +
+  resolusi referensi lintas-giliran jadi nilai konkret sebelum dispatch),
+  `KATEGORI_INSTRUCTION` (spesialis kategori, 2 tool), dan
+  `PRODUK_INSTRUCTION` (spesialis produk, 5 tool) -- tiap konstanta cuma
+  berisi aturan untuk tool-tool di spesialisnya sendiri, bukan satu daftar
+  gabungan 7 tool lagi. Larangan menjawab pertanyaan bertema waktu diulang
+  di ketiga instruksi (root menolak duluan untuk kasus jelas, tapi tiap
+  spesialis tetap punya penjagaan sendiri untuk kasus yang lolos ke sana).
 - Input pengguna per-giliran dikirim terpisah lewat
   `types.Content(role="user", parts=[types.Part(text=query)])` di `ask()`.
 
 **Yang belum:**
-- Prompt-nya masih satu blok teks statis dengan 7 aturan routing tool --
+- ~~Prompt-nya masih satu blok teks statis dengan 7 aturan routing tool --
   ini justru gejala dari kekosongan di lapisan Graph: routing yang
   seharusnya jadi struktur (node/edge) malah dipaksa jadi aturan bahasa
-  alami yang harus terus ditambal (lihat bagian Graph untuk rencana
-  memindahkan sebagian aturan ini ke struktur).
+  alami yang harus terus ditambal.~~ **Selesai, lihat bagian Graph #5:**
+  ini persis masalah yang migrasi Graph selesaikan -- routing sekarang
+  struktur (`root_agent` + `sub_agents`), bukan lagi aturan bahasa alami
+  di satu prompt yang ditambal terus. Instruksi tiap spesialis sendiri
+  masih teks statis (bukan struktur node/edge untuk tiap tool individual),
+  tapi ukurannya sekarang terikat ke jumlah tool DI SATU spesialis (2-5
+  tool), bukan seluruh katalog tool gabungan (7, dan akan terus bertambah).
 - Tidak ada mekanisme A/B atau versioning prompt -- setiap perubahan
   langsung mengubah file produksi. (Belum diprioritaskan -- satu pemilik,
   satu deployment, risiko rendah untuk saat ini.)
 
 **Saran tool:**
 - ~~`instruction` di `Agent` boleh berupa *callable*
-  (`InstructionProvider`)...~~ **Selesai** -- `_build_instruction()` di
-  `query.py` sekarang jadi `instruction` (bukan string statis lagi),
+  (`InstructionProvider`)...~~ **Selesai** -- diimplementasikan lewat
+  `_build_produk_instruction()` di `query.py`, dipasang HANYA di
+  `produk_specialist` (satu-satunya spesialis yang butuh info katalog
+  dinamis, lewat `search_catalog`/`find_cross_sell_candidates`) --
   menyisipkan jumlah produk katalog, jumlah yang sudah ter-index ChromaDB,
-  dan tanggal katalog terakhir diperbarui ke system prompt tiap giliran,
-  tanpa perlu edit manual saat data berubah.
-- **Kalau prompt makin kompleks:** pindahkan sebagian aturan routing (poin
-  1-7 di `SYSTEM_PROMPT`) ke struktur Graph (lihat bagian Graph) alih-alih
-  menambah lebih banyak aturan bahasa alami.
+  dan tanggal katalog terakhir diperbarui ke instruksinya tiap giliran,
+  tanpa perlu edit manual saat data berubah. `ROOT_INSTRUCTION` dan
+  `KATEGORI_INSTRUCTION` tetap string statis biasa (tidak butuh info
+  dinamis apa pun).
+- ~~**Kalau prompt makin kompleks:** pindahkan sebagian aturan routing
+  (poin 1-7 di `SYSTEM_PROMPT`) ke struktur Graph...~~ **Selesai** -- ini
+  sudah persis yang dikerjakan migrasi Graph (lihat bagian 5): routing
+  sekarang struktur (`root_agent` + `sub_agents=[kategori_specialist,
+  produk_specialist]`), bukan lagi aturan bahasa alami yang ditambal terus
+  di satu prompt.
 
 ---
 
@@ -253,7 +277,11 @@ berhenti tercapai.
   menulis loop manual sendiri. Masih salah satu opsi yang dipertimbangkan
   untuk verifikasi/reflection di atas -- lihat bagian Graph #Bagian 2.
 - ~~Lebih murah dulu sebelum ke LoopAgent: tambah instruksi eksplisit...~~
-  **Selesai** -- paragraf "PENTING: kutip angka..." di `SYSTEM_PROMPT`.
+  **Selesai** -- paragraf "PENTING: kutip angka..." (**REVISI setelah
+  migrasi Graph, lihat bagian 5:** dulu satu salinan di `SYSTEM_PROMPT`,
+  sekarang diulang di masing-masing dari 3 konstanta instruksi --
+  `ROOT_INSTRUCTION`, `KATEGORI_INSTRUCTION`, `PRODUK_INSTRUCTION` --
+  karena tiap agent sekarang punya instruksinya sendiri-sendiri).
   Menutup sebagian besar kasus salah-tafsir, tapi tidak semua (`test_report.jsonl`
   dari 104-kasus run masih menunjukkan beberapa kasus perlu chaining tool
   yang tidak selalu terjadi otomatis, mis. kasus MT02/CP04 di
@@ -263,7 +291,7 @@ berhenti tercapai.
 
 ---
 
-## 5. Graph — **Bagian 1 & 2 diimplementasikan (2 isu diketahui belum diperbaiki)**
+## 5. Graph — **Bagian 1 & 2 diimplementasikan (3 isu diketahui belum diperbaiki)**
 
 **Definisi:** struktur eksplisit (node = agent/langkah, edge = alur
 kontrol/data) untuk mengoordinasikan lebih dari satu agent atau tahap
@@ -503,7 +531,7 @@ dan regresi penuh:
   (`compare_migration_report.py`, `test_report.jsonl` vs.
   `test_report_pre_migration.jsonl`): **0 error baru**.
 
-**Dua temuan dari regresi 104-kasus, BELUM diperbaiki, dicatat di sini
+**Tiga temuan dari regresi 104-kasus, BELUM diperbaiki, dicatat di sini
 supaya tidak terkubur:**
 
 1. **Regresi routing PR04 (terisolasi, 1/104, tapi nyata):** pertanyaan
@@ -516,17 +544,67 @@ supaya tidak terkubur:**
    maupun sesudah migrasi. **Tindak lanjut:** perketat instruksi routing
    `ROOT_INSTRUCTION` untuk pertanyaan harga yang memakai kata "kategori",
    lalu uji ulang.
-2. **Regresi latensi kasus compound:** CP01-CP05 (pertanyaan
-   multi-tool/multi-topik) melambat 117%-773% pasca-migrasi (mis. CP03:
-   16.9s->147.5s) -- jauh melebihi perkiraan spec bagian 8 ("sedikit"
-   waktu tambahan untuk satu hop LLM ekstra). Akar masalah sudah
+2. **Regresi latensi -- SUITE-WIDE, bukan cuma kasus compound:** dihitung
+   langsung dari `test_report.jsonl` (pasca-migrasi) vs.
+   `test_report_pre_migration.jsonl` (pra-migrasi), `sum(duration_sec
+   tiap giliran)` per kasus, semua 104 kasus di kedua file: **total waktu
+   suite 1685s -> 7040s (+318%)**, **median perubahan per-kasus +218%**,
+   **100 dari 104 kasus melambat** (85 di antaranya lebih dari 100% lebih
+   lambat). Kasus terburuk BUKAN kasus compound: CS06 (+1632%), CS03
+   (+1146%), PR09 (+1120%, 6.1s->74.4s) -- ketiganya kasus satu-topik
+   biasa. Median pasca-migrasi berdasar jumlah dispatch spesialis per
+   kasus: 0 spesialis terpanggil (mis. penolakan tema waktu) ~7s, 1
+   spesialis ~50s, 2+ spesialis ~154s -- pola ini konsisten dengan akar
+   masalah di bawah (tiap dispatch root->spesialis membayar biaya penuh
+   satu hop LLM ekstra tanpa cache), bukan spesifik ke bentuk pertanyaan
+   compound. CP01-CP05 (kasus compound, dikutip di draf laporan
+   sebelumnya) tetap melambat 117%-773% dan masih satu titik data yang
+   valid dan ilustratif (lebih berat dari median karena men-dispatch 2+
+   spesialis), TAPI itu bukan cerita lengkapnya -- regresi ini melanda
+   hampir seluruh suite, bukan cuma kasus compound. Akar masalah sudah
    teridentifikasi (belum diperbaiki): agent-agent di `query.py` tidak
    punya `context_cache_config`, jadi ADK mengirim ulang seluruh prompt
    tanpa-cache (system instruction + deklarasi tool + histori) tiap kali
    transfer root->spesialis, alih-alih pakai cache -- dikonfirmasi lewat
-   warning startup ADK sendiri. **Tindak lanjut:** konfigurasikan
-   `context_cache_config` di app/agent, lalu ukur ulang latensi kasus
-   compound.
+   warning startup ADK sendiri, dan konsisten dengan pola "makin banyak
+   dispatch spesialis, makin lambat" di atas. **Catatan kejujuran:** kedua
+   run (`test_report.jsonl`, `test_report_pre_migration.jsonl`) dijalankan
+   di sesi terpisah, jadi ada kemungkinan variansi kontensi VRAM ikut
+   berkontribusi -- tapi pola 100/104 kasus melambat dengan median +218%
+   jauh melebihi yang bisa dijelaskan cuma oleh confound semacam itu.
+   **Tindak lanjut:** konfigurasikan `context_cache_config` di app/agent,
+   lalu ukur ulang latensi seluruh suite (bukan cuma CP01-CP05).
+3. **Dropout sintesis cross-sell di CP01 (1 dari 4 sampel independen):**
+   CP01 (`kasih rekomendasi lengkap: produk terlaris kategori Personal
+   Care, rentang harganya, dan produk cross-sell-nya`) adalah kasus
+   compound paling berat di suite (3 tool dirangkai dalam satu giliran).
+   Ditemukan lewat Task 4: dari 4 sampel independen live yang dijalankan
+   terhadap kasus ini, mekanisme tool-chaining-nya sendiri benar di
+   SEMUA 4 sampel (`get_top_sellers` -> `get_price_range` ->
+   `find_cross_sell_candidates`, semua terpanggil dalam satu giliran
+   `produk_specialist`, persis desain spec bagian 3). Tapi 1 dari 4
+   sampel gagal di langkah SINTESIS jawaban akhir: `produk_specialist`
+   memanggil `find_cross_sell_candidates` dengan benar, lalu menulis
+   jawaban akhir yang menyebut NOL kandidat cross-sell -- alih-alih itu,
+   menyarankan produk terlaris itu sendiri sebagai target cross-sell-nya
+   sendiri (secara konsep terbalik: kandidat cross-sell semestinya produk
+   LAIN yang penjualannya lebih rendah, bukan produk yang sama). 3 dari 4
+   sampel berhasil menyebut kandidat cross-sell konkret dan nyata (2 di
+   antaranya bahkan cocok sebagian/besar dengan kandidat yang disebut
+   baseline pra-migrasi). **Bukan diperkenalkan oleh migrasi ini** -- pola
+   sintesis lemah yang sama (tool terpanggil benar, tapi jawaban akhir
+   tidak sepenuhnya mengangkat hasilnya) sudah ada SEBELUM migrasi di
+   kasus lain (mis. MT02 giliran ke-2, lihat `test_report_pre_migration.jsonl`).
+   Detail lengkap 4 sampel ada di
+   `.superpowers/sdd/2026-09-05-graph-migration-plan/task-4-report.md`
+   (bagian "Fix report (round 2)" dan "Revised, unsoftened conclusion").
+   **Tindak lanjut:** bukan bug spesifik migrasi untuk diperbaiki di sini,
+   tapi risiko nyata (jawaban lancar yang diam-diam menghilangkan data
+   yang justru diminta) yang butuh investigasi terpisah -- kandidat: perkuat
+   `PRODUK_INSTRUCTION` agar mewajibkan ketiga bagian yang diminta
+   benar-benar hadir di jawaban akhir, atau perluas `verify_and_revise()`
+   untuk mendeteksi "bagian yang diminta tapi diam-diam hilang", bukan
+   cuma mismatch angka.
 
 Detail lengkap ada di `2026-09-05-graph-migration-design.md` (spec) dan
 `2026-09-05-graph-migration-plan.md` (rencana implementasi per-task) --
@@ -541,7 +619,9 @@ cukup dipasang di `ask()` yang sudah ada.
 
 1. ~~**Loop** -- tambah aturan "kutip angka persis dari tool" di
    `SYSTEM_PROMPT`.~~ **Selesai** -- lihat paragraf "PENTING: kutip angka..."
-   di `SYSTEM_PROMPT`.
+   (**REVISI setelah migrasi Graph, lihat bagian 5:** dulu di `SYSTEM_PROMPT`
+   tunggal, sekarang diulang di masing-masing dari `ROOT_INSTRUCTION`,
+   `KATEGORI_INSTRUCTION`, `PRODUK_INSTRUCTION`).
 2. ~~**Harness** -- tambah `before_tool_callback`/`after_tool_callback`
    ringan untuk logging durasi tool.~~ **Selesai** -- `_log_before_tool`/
    `_log_after_tool` di `query.py`, output ke `tool_calls.log` (format:
@@ -557,8 +637,13 @@ cukup dipasang di `ask()` yang sudah ada.
    dari histori sesi sebelumnya, tanpa panggilan tool baru (dibuktikan lewat
    `tool_calls.log` yang tidak bertambah baris di giliran itu).
 4. ~~**Prompt** -- pindahkan `instruction` dari string statis ke
-   `InstructionProvider`.~~ **Selesai** -- `_build_instruction()` di
-   `query.py`, menyisipkan jumlah produk katalog/index dan tanggal update.
+   `InstructionProvider`.~~ **Selesai** -- `_build_produk_instruction()` di
+   `query.py` (**REVISI setelah migrasi Graph, lihat bagian 5:** dulu
+   fungsinya bernama `_build_instruction()` dan dipasang di satu-satunya
+   root agent; sekarang dipasang hanya di `produk_specialist`, spesialis
+   yang butuh info katalog dinamis -- `ROOT_INSTRUCTION` dan
+   `KATEGORI_INSTRUCTION` tetap string statis), menyisipkan jumlah produk
+   katalog/index dan tanggal update.
 5. ~~**Loop** -- retry sekali untuk panggilan tool yang rawan
    transient-fail.~~ **Selesai** -- `_embed()` di `query.py` retry sekali
    dengan jeda 1 detik untuk panggilan `ollama.embeddings()`.
@@ -568,11 +653,15 @@ cukup dipasang di `ask()` yang sudah ada.
    + pengelompokan spesialis (`root_agent` router + `kategori_specialist`
    + `produk_specialist`) sudah di `query.py`, diverifikasi lewat smoke
    test live (routing, chaining, resolusi referensi lintas-giliran) dan
-   regresi penuh 104-kasus (0 error baru) -- **tapi dua isu diketahui
+   regresi penuh 104-kasus (0 error baru) -- **tapi tiga isu diketahui
    BELUM diperbaiki**: regresi routing PR04 (1/104, salah rute pertanyaan
-   harga berkata "kategori") dan regresi latensi kasus compound
-   (117%-773%, akar masalah: tidak ada `context_cache_config`) -- lihat
-   bagian 5 di atas untuk detail lengkap kedua isu ini.
+   harga berkata "kategori"), regresi latensi yang ternyata suite-wide
+   (total suite +318%, median per-kasus +218%, 100/104 kasus melambat --
+   bukan cuma kasus compound seperti draf awal temuan ini; akar masalah:
+   tidak ada `context_cache_config`), dan dropout sintesis cross-sell di
+   CP01 (1 dari 4 sampel independen menyebut nol kandidat cross-sell
+   walau tool-nya terpanggil benar) -- lihat bagian 5 di atas untuk detail
+   lengkap ketiga isu ini.
 7. **Context (memori semantik lintas-sesi)** -- **ditunda, keputusan
    sadar**: kanari ukuran sesi (`_warn_if_session_growing()`) dipasang
    sebagai langkah pertama untuk risiko context-window yang lebih nyata;
@@ -586,6 +675,6 @@ cukup dipasang di `ask()` yang sudah ada.
    `root_agent` jadi router + spesialis) belum ditulis ke kode.~~
    **Selesai** -- `root_agent` router + `kategori_specialist` +
    `produk_specialist` sudah di `query.py`, diverifikasi lewat smoke test
-   live dan regresi 104-kasus, lihat bagian 5 untuk detail DAN dua isu
+   live dan regresi 104-kasus, lihat bagian 5 untuk detail DAN tiga isu
    diketahui yang masih belum diperbaiki (regresi routing PR04, regresi
-   latensi kasus compound).
+   latensi suite-wide, dropout sintesis cross-sell CP01).

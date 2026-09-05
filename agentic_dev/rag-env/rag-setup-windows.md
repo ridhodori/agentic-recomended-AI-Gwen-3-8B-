@@ -212,7 +212,7 @@ konteks percakapan (rekomendasi sebelumnya) tetap diingat.
 - [x] Sesi persisten lintas-restart lewat `SqliteSessionService` (`agent_sessions.db`), ganti `InMemorySessionService`
 - [x] Observability minimal: `before_tool_callback`/`after_tool_callback` mencatat tiap panggilan tool ke `tool_calls.log`
 - [x] Uji regresi otomatis: `test_agent_cases.py` (104 kasus/107 giliran), lihat `PANDUAN_PENGGUNAAN.md`
-- [x] Instruksi dinamis: `_build_instruction()` (`InstructionProvider`) menyisipkan jumlah produk/index/tanggal update ke system prompt tiap giliran
+- [x] Instruksi dinamis: `_build_produk_instruction()` (`InstructionProvider`, **REVISI setelah migrasi Graph:** dulu `_build_instruction()` dipasang di satu-satunya root agent, sekarang dipasang hanya di `produk_specialist`) menyisipkan jumlah produk/index/tanggal update ke instruksinya tiap giliran
 - [x] Retry sekali untuk panggilan embedding Ollama yang transient-fail (`_embed()` di `query.py`)
 - [x] Loop verifikasi akurasi jawaban akhir vs. data tool -- `verify_and_revise()` di `query.py` (opsi hybrid, dipilih lewat benchmark nyata di `benchmark_verify_loop.py`, lihat `infrastructure_agentic.md` bagian Graph #Bagian 2 untuk angka lengkap)
 - [ ] `get_user_history()` -- **tidak bisa dibangun** dari `transaction_data.csv` saat ini (tidak ada user_id/timestamp). Perlu sumber data baru kalau personalisasi per-user tetap diinginkan.
