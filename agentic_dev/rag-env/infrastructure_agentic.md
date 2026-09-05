@@ -688,6 +688,93 @@ interaktif pengguna dan SUDAH diperbaiki, ada di bawah nomor 4):
      sama dengan pesan susulan eksplisit menyuruh memanggil spesialis,
      tapi ini menambah 1 giliran ke riwayat sesi permanen (`agent_sessions.db`)
      -- belum diprioritaskan.
+   - **FALSE POSITIVE ditemukan lewat laporan pengguna baru (jaring
+     pengaman di atas SALAH menolak jawaban yang sebenarnya BENAR):**
+     pengguna terjebak loop -- 3 giliran berturut-turut kena pesan
+     penolakan yang SAMA PERSIS, termasuk setelah mengetik ulang persis
+     saran rephrase yang diberikan pesan itu sendiri ("ambil dulu 5
+     produk terlaris, baru buatkan ide promo untuk masing-masing").
+     Diinvestigasi lewat `agent_sessions.db` (bukan tebakan): root
+     ternyata TIDAK mengarang -- draft-nya mengutip PERSIS angka dari
+     `get_top_sellers` (453x/Rp25.500 dst. untuk "sabun mandi") yang
+     benar-benar dipanggil ~24 JAM sebelumnya di sesi abadi yang sama
+     (`SESSION_ID` tetap sama selamanya, root punya akses penuh ke
+     riwayat sesi tiap giliran). Root secara SAH memilih tidak
+     memanggil tool lagi karena datanya sudah ada di riwayat -- perilaku
+     yang benar dan efisien -- tapi `_verify_and_revise_impl()` cuma
+     mengecek angka draft terhadap data tool GILIRAN INI + pertanyaan
+     pengguna, jadi pengulangan data lama yang sah pun ikut ditandai
+     sebagai karangan.
+     - Sempat dicurigai num_ctx=8192 kepotong (riwayat sesi tumbuh terus
+       tanpa windowing) -- **dicek langsung ke `usage_metadata.prompt_token_count`
+       di event tersimpan (bukan estimasi char/token kasar) dan
+       TERBANTAH**: giliran yang gagal cuma ~3800-4900 token, jauh di
+       bawah batas 8192. Bukan itu sebabnya.
+     - **Fix:** `_extract_session_tool_numbers()` (baru) membaca
+       `function_response` dari SELURUH riwayat sesi (bukan cuma giliran
+       ini), difilter ke `_DATA_TOOL_NAMES` saja (tool data mentah --
+       balasan sintesis produk_specialist/kategori_specialist sendiri
+       sengaja tidak ikut, itu tetap bisa hallucinate, lihat
+       `_log_after_tool_root`). Angkanya jadi sumber "allowed" tambahan
+       di kedua cabang `_verify_and_revise_impl` (nol-tool DAN
+       mismatch-check). Diverifikasi unit-level langsung terhadap sesi
+       nyata pengguna yang macet (`agent_sessions.db`): draft yang tadinya
+       ditolak sekarang lolos tanpa perubahan, SEKALIGUS draft fabrikasi
+       sintetis (angka yang tidak ada di riwayat maupun pertanyaan) tetap
+       ditolak seperti sebelumnya -- lihat riwayat commit untuk skrip
+       verifikasinya.
+   - **Follow-up sama hari -- fix di atas TIDAK ter-deploy ke file yang
+     BENAR-BENAR dijalankan pengguna:** laporan bug lanjutan pengguna
+     ternyata pesan penolakan yang SAMA PERSIS untuk pertanyaan yang JUGA
+     sama persis dengan yang sudah "diperbaiki". Root cause: fix di atas
+     cuma dikerjakan (dan awalnya cuma di-commit) di worktree
+     `D:/agentic/.worktrees/graph-migration`, sedangkan pengguna
+     menjalankan `python query.py` dari `D:/agentic/agentic_dev/rag-env/`
+     (checkout `main`) -- dua working tree TERPISAH di git worktree, jadi
+     fix-nya tidak pernah ikut jalan. Diperbaiki dengan menyalin file yang
+     sudah diperbaiki ke checkout `main` secara langsung.
+   - **Follow-up kedua, ditemukan lewat pertanyaan sungguhan pengguna
+     berikutnya ("buatkan 5 rekomendasi promo...") -- kasus BERBEDA yang
+     fix angka-riwayat di atas TIDAK cukup untuk itu:** draft-nya
+     menyebut 5 nama produk NYATA (dari riwayat yang sama) TAPI
+     menambahkan angka promosi BARU (diskon 15-20%, harga bundel
+     Rp10.000-Rp80.000) yang memang SENGAJA boleh dikarang sendiri oleh
+     root (lihat `ROOT_INSTRUCTION`, paragraf "Bagian yang murni saranmu
+     sendiri... boleh kamu tambahkan"). Karena angka promosi itu TIDAK
+     ada di `history_nums`, `suspicious_nums` tetap tinggi dan draft
+     tetap ditolak walau produknya nyata.
+     - **Percobaan A (GAGAL, ditemukan lewat stress-test sendiri sebelum
+       di-deploy):** cek overlap KATA nama produk (bukan angka) antara
+       draft dan nama produk nyata dari riwayat -- root sering menyingkat
+       nama di jawaban kreatif (mis. "Biore Guard 725 ml" alih-alih nama
+       katalog penuh), jadi substring persis tidak pernah cocok, makanya
+       dicoba overlap kata. GAGAL total di stress-test adversarial buatan
+       sendiri: draft dengan brand & angka KARANGAN TOTAL ("Sabun Mandi
+       Cair Merek Wangi", dst.) tetap lolos, karena kata generik penanda
+       kategori ("sabun", "mandi", "cair", "anti bakteri") kebetulan
+       muncul di HAMPIR SEMUA nama produk segmen yang sama -- draft apa
+       pun yang membahas kategori itu otomatis "match" ke banyak nama
+       produk walau tidak menyebut satu pun produk spesifik yang nyata.
+       Tidak pernah dikirim ke pengguna -- ketahuan lewat stress-test
+       sebelum deploy.
+     - **Fix aktual (dipasang):** dropped pendekatan kata-nama sama
+       sekali, ganti dengan RASIO angka nyata dari draft (bukan hitungan
+       absolut) -- `_MIN_GROUNDED_NUM_MATCHES=2` angka draft harus match
+       `history_nums` DAN rasio match >= `_MIN_GROUNDED_NUM_RATIO=0.25`
+       dari total angka di draft. Angka (mis. "725", "450" dari ukuran
+       kemasan produk asli yang kebetulan disebut ulang) jauh lebih
+       spesifik/acak daripada kata kategori, jadi rasio ini TIDAK
+       kebobolan oleh stress-test adversarial yang sama (rasio-nya 0.00,
+       nol angka match sama sekali). Diverifikasi 4 kasus sekaligus:
+       plain-recall (lolos), promo real+kreatif (lolos, rasio 0.33),
+       adversarial kata-generik (tetap ditolak), fabrikasi brand total
+       (tetap ditolak).
+     - **Trade-off yang jujur:** ini TIDAK menjamin SETIAP angka di
+       jawaban kreatif itu nyata (bukan tujuannya -- `ROOT_INSTRUCTION`
+       sendiri mengizinkan angka saran/marketing), cuma menjamin sebagian
+       cukup besar dari angka yang disebut punya basis data sungguhan,
+       jadi draft yang produk & sebagian datanya nyata tidak lagi
+       diblokir cuma karena menambahkan angka promosi kreatif di atasnya.
 
 Detail lengkap ada di `2026-09-05-graph-migration-design.md` (spec) dan
 `2026-09-05-graph-migration-plan.md` (rencana implementasi per-task) --
