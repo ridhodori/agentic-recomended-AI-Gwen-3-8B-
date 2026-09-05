@@ -41,11 +41,17 @@ Catatan implementasi:
     info katalog terkini tiap giliran (lihat infrastructure_agentic.md bagian Prompt).
   - Tiap giliran diakhiri verify_and_revise(): cek murah (regex angka) draft
     jawaban vs data tool MENTAH yang benar-benar dipanggil giliran itu
-    (_current_turn_tool_outputs, diisi after_tool_callback) -- cuma eskalasi
-    ke satu panggilan model tambahan kalau ada mismatch atau klaim tanpa
-    angka verifiable. Opsi ini (hybrid) dipilih lewat benchmark nyata di
-    benchmark_verify_loop.py, bukan LoopAgent tiap giliran (terlalu mahal di
-    VRAM 8GB) -- lihat infrastructure_agentic.md bagian Graph #Bagian 2.
+    (_current_turn_tool_outputs, diisi after_tool_callback) DITAMBAH angka
+    dari function_response tool data mentah di SELURUH riwayat sesi
+    (_extract_session_tool_numbers) -- root sah menjawab dari data yang
+    sudah diambil giliran sebelumnya tanpa panggil tool lagi, jadi tanpa
+    riwayat ini pengulangan data nyata keliru ditandai karangan (lihat
+    kasus nyata di infrastructure_agentic.md bagian Graph #4). Cuma
+    eskalasi ke satu panggilan model tambahan kalau masih ada mismatch atau
+    klaim tanpa angka verifiable. Opsi ini (hybrid) dipilih lewat benchmark
+    nyata di benchmark_verify_loop.py, bukan LoopAgent tiap giliran (terlalu
+    mahal di VRAM 8GB) -- lihat infrastructure_agentic.md bagian Graph
+    #Bagian 2.
   - _warn_if_session_growing() mencatat peringatan sekali per ambang batas
     kalau riwayat sesi (SESSION_ID tetap sama selamanya) mulai mendekati
     batas num_ctx=8192 -- kanari murah, bukan solusi penuh (lihat
@@ -557,8 +563,70 @@ def _extract_numbers(text: str) -> set[str]:
 # jelas di atas nol tapi jelas di bawah pola fabrikasi nyata yang teramati.
 _SUSPICIOUS_NUM_THRESHOLD = 3
 
+# Nama tool DATA MENTAH (bukan produk_specialist/kategori_specialist itu
+# sendiri, yang jawabannya sintesis LLM dan bisa hallucinate -- lihat
+# _log_after_tool_root) -- dipakai _extract_session_tool_numbers() untuk
+# memfilter function_response mana di riwayat sesi yang boleh dianggap
+# ground-truth.
+_DATA_TOOL_NAMES = {
+    "search_catalog",
+    "get_top_sellers",
+    "find_cross_sell_candidates",
+    "get_top_categories",
+    "get_worst_sellers",
+    "get_category_assortment",
+    "get_price_range",
+}
 
-def _verify_and_revise_impl(draft_answer: str, tool_outputs: str, question: str = "") -> str:
+# Untuk draft "kreatif" (mis. ide promo) yang MENAMBAHKAN angka baru secara
+# sengaja (diskon %, harga bundel -- ROOT_INSTRUCTION mengizinkan ini) di
+# atas data nyata, draft TETAP dianggap cukup berbasis data kalau sebagian
+# angkanya match ke history_nums. Sempat dicoba deteksi lewat overlap KATA
+# nama produk (bukan angka) supaya lebih tegas -- GAGAL lewat stress-test
+# adversarial: kata generik penanda kategori (mis. "sabun", "mandi", "cair",
+# "anti bakteri") muncul di HAMPIR SEMUA nama produk segmen yang sama, jadi
+# draft yang brand & angkanya karangan TOTAL pun lolos cuma karena menyebut
+# istilah kategori umum. Rasio angka NYATA (jauh lebih spesifik/acak
+# daripada kata kategori, kecil kemungkinan cocok karena kebetulan) jauh
+# lebih tahan terhadap celah itu -- lihat infrastructure_agentic.md.
+_MIN_GROUNDED_NUM_MATCHES = 2
+_MIN_GROUNDED_NUM_RATIO = 0.25
+
+
+def _extract_session_tool_numbers(session) -> set[str]:
+    """Angka dari SEMUA function_response tool data mentah di SELURUH riwayat
+    sesi (bukan cuma giliran ini) -- root punya akses penuh ke riwayat sesi
+    tiap giliran (ADK include_contents="default"), jadi WAJAR dan BENAR kalau
+    root menjawab dari data yang sudah diambil giliran-giliran sebelumnya
+    tanpa memanggil tool lagi. Ditemukan lewat investigasi laporan pengguna
+    (giliran nol-tool-call yang ditolak _verify_and_revise_impl ternyata
+    mengutip PERSIS angka dari get_top_sellers yang dipanggil ~24 jam
+    sebelumnya di sesi abadi yang sama, dikonfirmasi lewat
+    agent_sessions.db) -- tanpa ini, verify_and_revise salah menandai
+    pengulangan data NYATA sebagai karangan, cuma karena tool-nya tidak
+    dipanggil ULANG di giliran yang sama. Cuma function_response dari
+    _DATA_TOOL_NAMES yang dihitung -- jawaban sintesis produk_specialist/
+    kategori_specialist sendiri (dicatat di level root sebagai tool_response
+    juga, lihat _log_after_tool_root) sengaja tidak ikut, itu tetap bisa
+    hallucinate."""
+    nums: set[str] = set()
+    for event in session.events:
+        content = getattr(event, "content", None)
+        if not content or not content.parts:
+            continue
+        for part in content.parts:
+            fr = getattr(part, "function_response", None)
+            if fr is not None and getattr(fr, "name", None) in _DATA_TOOL_NAMES:
+                nums |= _extract_numbers(str(fr.response))
+    return nums
+
+
+def _verify_and_revise_impl(
+    draft_answer: str,
+    tool_outputs: str,
+    question: str = "",
+    history_nums: frozenset[str] = frozenset(),
+) -> str:
     """Loop verifikasi akurasi (Graph Bagian 2, hybrid) -- lihat
     infrastructure_agentic.md untuk benchmark & alasan pemilihan opsi ini.
 
@@ -586,14 +654,21 @@ def _verify_and_revise_impl(draft_answer: str, tool_outputs: str, question: str 
         # lihat litellm/llms/ollama/chat/transformation.py:186, komentarnya
         # sendiri "causes ollama requests to hang") -- jadi ini satu-satunya
         # jaring pengaman yang bisa dipasang tanpa akses tool asli di sini.
-        suspicious_nums = _extract_numbers(draft_answer) - _extract_numbers(question)
-        if len(suspicious_nums) < _SUSPICIOUS_NUM_THRESHOLD:
-            return draft_answer  # penolakan sah / tidak ada angka konkret asing -- tidak ada yang perlu diverifikasi
+        draft_nums_all = _extract_numbers(draft_answer)
+        suspicious_nums = draft_nums_all - _extract_numbers(question) - history_nums
+        grounded_nums = draft_nums_all & history_nums
+        grounded_ratio = len(grounded_nums) / len(draft_nums_all) if draft_nums_all else 0.0
+        creative_but_grounded = (
+            len(grounded_nums) >= _MIN_GROUNDED_NUM_MATCHES and grounded_ratio >= _MIN_GROUNDED_NUM_RATIO
+        )
+        if len(suspicious_nums) < _SUSPICIOUS_NUM_THRESHOLD or creative_but_grounded:
+            return draft_answer  # penolakan sah / angka asing sedikit / cukup angka nyata dari riwayat utk jawaban kreatif
         with open(TOOL_LOG_PATH, "a", encoding="utf-8") as f:
             f.write(
                 f"NOTE {datetime.now().isoformat(timespec='seconds')} | verify_and_revise | "
                 f"NOL TOOL DIPANGGIL tapi draft menyebut {len(suspicious_nums)} angka konkret asing "
-                f"-- kemungkinan dikarang, draft ditolak: {suspicious_nums}\n"
+                f"dan cuma {len(grounded_nums)}/{len(draft_nums_all)} angka match riwayat (rasio {grounded_ratio:.2f}) -- "
+                f"kemungkinan dikarang, draft ditolak: {suspicious_nums}\n"
             )
         return (
             "Saya belum benar-benar mengambil data penjualan untuk pertanyaan ini "
@@ -611,7 +686,7 @@ def _verify_and_revise_impl(draft_answer: str, tool_outputs: str, question: str 
     # produk...") yang bukan data dari tool, dan tanpa ini verify_and_revise
     # eskalasi di ~50% giliran (jauh di atas ~8% hasil benchmark), bukan
     # karena jawabannya salah, tapi karena pengecekannya terlalu ketat.
-    allowed_nums = tool_nums | _extract_numbers(question)
+    allowed_nums = tool_nums | _extract_numbers(question) | history_nums
     if draft_nums and draft_nums.issubset(allowed_nums):
         return draft_answer  # semua angka cocok -- selesai tanpa panggilan model kedua
 
@@ -653,8 +728,13 @@ def _verify_and_revise_impl(draft_answer: str, tool_outputs: str, question: str 
     return revised
 
 
-async def verify_and_revise(draft_answer: str, tool_outputs: str, question: str = "") -> str:
-    return await asyncio.to_thread(_verify_and_revise_impl, draft_answer, tool_outputs, question)
+async def verify_and_revise(
+    draft_answer: str,
+    tool_outputs: str,
+    question: str = "",
+    history_nums: frozenset[str] = frozenset(),
+) -> str:
+    return await asyncio.to_thread(_verify_and_revise_impl, draft_answer, tool_outputs, question, history_nums)
 
 
 kategori_specialist = Agent(
@@ -735,7 +815,15 @@ async def ask(runner, query, user_id=USER_ID, session_id=SESSION_ID):
             if texts:
                 final_text = "\n".join(texts)
     tool_outputs = "\n".join(_current_turn_tool_outputs)
-    return await verify_and_revise(final_text, tool_outputs, query)
+    # Riwayat sesi (bukan cuma giliran ini) dibaca ulang di sini supaya
+    # verify_and_revise bisa membedakan "mengulang/berbasis data nyata dari
+    # giliran sebelumnya" (sah) dari "mengarang" (ditolak) -- lihat
+    # _extract_session_tool_numbers().
+    session = await runner.session_service.get_session(
+        app_name=APP_NAME, user_id=user_id, session_id=session_id
+    )
+    history_nums = frozenset(_extract_session_tool_numbers(session)) if session is not None else frozenset()
+    return await verify_and_revise(final_text, tool_outputs, query, history_nums)
 
 
 async def main():
