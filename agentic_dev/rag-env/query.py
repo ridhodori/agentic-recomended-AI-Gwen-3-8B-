@@ -59,6 +59,7 @@ Catatan implementasi:
 """
 
 import asyncio
+import glob
 import os
 import re
 import time
@@ -84,7 +85,7 @@ os.environ.setdefault("OLLAMA_API_BASE", "http://localhost:11434")
 MODEL_LLM = "ollama_chat/qwen3-agent:latest"
 MODEL_EMBED = "nomic-embed-text"
 KATALOG_CSV = "D:/agentic/chroma_db/katalog_produk.csv"
-TRANSACTION_CSV = "D:/agentic/transaction_data/transaction_data.csv"
+TRANSACTION_CSV_GLOB = "D:/agentic/transaction_data/transaction_day*.csv"
 SESSION_DB_PATH = "D:/agentic/chroma_db/agent_sessions.db"
 TOOL_LOG_PATH = "D:/agentic/agentic_dev/rag-env/tool_calls.log"
 
@@ -100,7 +101,10 @@ _transactions_cache = None
 def _load_transactions():
     global _transactions_cache
     if _transactions_cache is None:
-        _transactions_cache = pd.read_csv(TRANSACTION_CSV)
+        paths = sorted(glob.glob(TRANSACTION_CSV_GLOB))
+        df = pd.concat((pd.read_csv(p) for p in paths), ignore_index=True)
+        df["transaction_time"] = pd.to_datetime(df["transaction_time"], format="%Y-%m-%d%H:%M:%S")
+        _transactions_cache = df
     return _transactions_cache
 
 
