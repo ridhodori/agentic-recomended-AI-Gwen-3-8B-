@@ -634,10 +634,14 @@ Data time coverage: the transaction data currently available covers
 reflects whatever transaction_dayN.csv files are currently loaded -- if more
 daily files are added later, this range updates automatically). Time-themed
 questions (e.g. "sales this week", "trending now", "recently", "what's hot
-lately") CAN be answered now, through get_trending_products/
-get_trending_categories (compares the two most recent dates in the data) or
-the optional start_date/end_date filters on get_top_sellers/get_top_categories
--- call the relevant specialist for these instead of refusing. BUT if the
+lately", "what time of day sells the most") CAN be answered now, through
+get_trending_products/get_trending_categories (compares the two most recent
+dates in the data), the optional start_date/end_date filters on
+get_top_sellers/get_top_categories, or get_peak_hours (busiest hour of day --
+works across the whole dataset even when no product/category is named, so
+this is NOT a per-customer or out-of-range request just because it mentions
+"jam"/"time of day") -- call the relevant specialist for these instead of
+refusing. BUT if the
 question's date/range falls OUTSIDE {date_range}, or uses a relative phrase
 whose coverage is unclear given how little data exists (e.g. "last month" when
 only a few days of data exist), do NOT call any specialist to make up an
@@ -724,7 +728,8 @@ Your job, pick the tool that matches the request type:
    data, e.g. "which product is trending/picking up now") ->
    get_trending_products.
 5. Busiest selling hours (for staffing/promo-timing questions, e.g. "what
-   time of day sells the most") -> get_peak_hours.
+   time of day sells the most") -> get_peak_hours (leave segment empty for
+   peak hours across the whole dataset, not just one product/category).
 6. If the request mentions "products similar/comparable to [X]" -- WHATEVER
    qualifier is attached (e.g. "with low sales", "that sell better", "for
    cross-selling") -- use find_cross_sell_candidates with product_name=X. If
