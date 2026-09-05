@@ -27,6 +27,9 @@ def main():
     before = _load(BEFORE_PATH)
     after = _load(AFTER_PATH)
 
+    print(f"Jumlah kasus: sebelum={len(before)}, sesudah={len(after)}")
+    print("(kalau salah satu bukan 104, salah satu file kemungkinan terpotong/run belum selesai)")
+
     new_errors = []
     tool_mismatches = []
     for case_id, after_rec in after.items():

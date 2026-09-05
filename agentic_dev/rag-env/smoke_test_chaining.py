@@ -2,7 +2,7 @@
 memvalidasi perbaikan chaining & co-occurrence tool sebelum migrasi ini
 (MT02, CS10, CP04, SC12, CP01), pakai root_agent + specialist BARU, cetak
 tool yang benar-benar terpanggil untuk dibandingkan MANUAL dengan
-test_report.jsonl (baseline sebelum migrasi) -- bukan hard assert, karena
+test_report_pre_migration.jsonl (baseline sebelum migrasi) -- bukan hard assert, karena
 perilaku model tetap probabilistik (sama seperti semua smoke test lain di
 proyek ini).
 Prasyarat: Ollama jalan di localhost:11434.
@@ -15,7 +15,7 @@ import json
 from test_agent_cases import CASES, run_case
 
 TARGET_CASE_IDS = {"MT02", "CS10", "CP04", "SC12", "CP01"}
-BASELINE_PATH = "D:/agentic/agentic_dev/rag-env/test_report.jsonl"
+BASELINE_PATH = "D:/agentic/agentic_dev/rag-env/test_report_pre_migration.jsonl"
 
 
 def _load_baseline():

@@ -9,7 +9,6 @@ Jalankan: ./Scripts/python.exe smoke_test_context_handoff.py
 """
 
 import asyncio
-import json
 
 from query import TOOL_LOG_PATH
 from test_agent_cases import CASES, run_case

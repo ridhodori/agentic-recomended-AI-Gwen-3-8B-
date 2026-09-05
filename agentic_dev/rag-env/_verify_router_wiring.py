@@ -23,7 +23,6 @@ def main():
     )
     print(f"PASS: root_agent.tools otomatis ter-wrap jadi {tool_names}")
 
-    assert query.root_agent.tools == [] or True  # no-op guard, real check is tool_names above
     assert len(query.root_agent.sub_agents) == 2, (
         f"FAIL: root_agent.sub_agents seharusnya berisi 2 specialist, dapat {len(query.root_agent.sub_agents)}"
     )
