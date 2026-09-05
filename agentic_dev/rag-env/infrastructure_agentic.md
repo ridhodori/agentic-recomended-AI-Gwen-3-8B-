@@ -28,8 +28,13 @@ sumber yang ter-install di `Lib/site-packages/google/adk/` pada venv ini
 > regresi latensi yang ternyata **suite-wide** (bukan cuma kasus compound --
 > total waktu suite 104-kasus +318%, median per-kasus +218%, 100/104 kasus
 > melambat, kurang `context_cache_config`), dan satu sampel dropout sintesis
-> cross-sell di kasus compound paling berat (CP01, 1/4 sampel independen) --
-> lihat bagian 5 untuk detail ketiganya.
+> cross-sell di kasus compound paling berat (CP01, 1/4 sampel independen).
+> Isu keempat ditemukan BELAKANGAN lewat pengujian interaktif pengguna
+> (bukan dari 104 kasus regresi) DAN SUDAH diperbaiki: root melewati
+> delegasi sama sekali untuk permintaan bergaya "buatkan rekomendasi promo"
+> -- jawaban lancar tapi nol tool dipanggil, jadi kemungkinan besar dikarang.
+> Diperbaiki lewat paragraf baru di `ROOT_INSTRUCTION` yang menutup celah
+> framing kreatif/strategis. Lihat bagian 5 untuk detail keempatnya.
 
 | Lapisan | Status | Implementasi saat ini |
 |---|---|---|
@@ -37,7 +42,7 @@ sumber yang ter-install di `Lib/site-packages/google/adk/` pada venv ini
 | **Context** | Sebagian | RAG (ChromaDB) + data terstruktur (pandas) + sesi persisten (`SqliteSessionService` -> `agent_sessions.db`) ada; memori semantik lintas-sesi belum -- **menunggu keputusan scoping** (lihat bagian Context: desain sesi tunggal-abadi saat ini tidak cocok langsung dengan API `BaseMemoryService` yang berbasis multi-sesi) |
 | **Harness** | Ada | `google-adk` (`Agent` + `Runner` + `LiteLlm` -> Ollama) + `before_tool_callback`/`after_tool_callback` -> `tool_calls.log` + `test_agent_cases.py` (104 kasus regresi otomatis) |
 | **Loop** | Ada | Tool-calling loop (ReAct-style) dari ADK + retry sekali untuk embedding Ollama + `verify_and_revise()` (loop verifikasi akurasi hybrid, dipilih lewat benchmark nyata) |
-| **Graph** | **Bagian 1 & 2 diimplementasikan, 3 isu diketahui belum diperbaiki** | Root router (`tools=[]`) + `kategori_specialist` + `produk_specialist`, plus `verify_and_revise()` untuk Bagian 2 -- diverifikasi lewat smoke test live + regresi 104-kasus, lihat bagian 5 untuk detail dan ketiga isu terbuka (PR04, latensi suite-wide, dropout sintesis cross-sell CP01) |
+| **Graph** | **Bagian 1 & 2 diimplementasikan, 3 isu diketahui belum diperbaiki + 1 isu ditemukan & diperbaiki** | Root router (`tools=[]`) + `kategori_specialist` + `produk_specialist`, plus `verify_and_revise()` untuk Bagian 2 -- diverifikasi lewat smoke test live + regresi 104-kasus, lihat bagian 5 untuk detail, ketiga isu terbuka (PR04, latensi suite-wide, dropout sintesis cross-sell CP01), dan isu keempat (root melewati delegasi untuk framing "rekomendasi promo", ditemukan pasca-implementasi, sudah diperbaiki) |
 
 Baris ini dulu (sebelum migrasi) berbunyi "**Graph** benar-benar belum
 tersentuh sama sekali" -- sudah tidak berlaku lagi, lihat bagian 5.
@@ -532,7 +537,8 @@ dan regresi penuh:
   `test_report_pre_migration.jsonl`): **0 error baru**.
 
 **Tiga temuan dari regresi 104-kasus, BELUM diperbaiki, dicatat di sini
-supaya tidak terkubur:**
+supaya tidak terkubur** (temuan keempat, ditemukan terpisah lewat pengujian
+interaktif pengguna dan SUDAH diperbaiki, ada di bawah nomor 4):
 
 1. **Regresi routing PR04 (terisolasi, 1/104, tapi nyata):** pertanyaan
    rentang harga yang memakai kata "kategori" ("berapa harga median
@@ -605,6 +611,48 @@ supaya tidak terkubur:**
    benar-benar hadir di jawaban akhir, atau perluas `verify_and_revise()`
    untuk mendeteksi "bagian yang diminta tapi diam-diam hilang", bukan
    cuma mismatch angka.
+4. **Root melewati delegasi untuk permintaan bergaya kreatif/strategis
+   (ditemukan pasca-implementasi lewat pengujian interaktif pengguna,
+   SUDAH DIPERBAIKI):** pengguna menjalankan sesi interaktif (`python
+   query.py`) dan bertanya "berikan aku 5 rekomendasi promo yang bisa di
+   buat berdasarkan 5 product terlaris". Root menjawab lancar dengan nama
+   produk, persentase diskon, dan harga bundel spesifik -- TANPA memanggil
+   satu tool pun. Dikonfirmasi lewat `tool_calls.log`: baris terakhir
+   sebelum giliran ini adalah dari regresi Task 7 (18:58), giliran
+   pengguna berlangsung 21:33, lebih dari 2.5 jam tanpa baris baru sama
+   sekali -- bukti langsung nol tool call. Artinya seluruh detail konkret
+   di jawaban itu (produk mana yang terlaris, harga, diskon) kemungkinan
+   besar dikarang, bukan diambil dari data nyata. Gap ini tidak tercakup
+   satupun dari 104 kasus regresi karena semuanya berupa lookup literal
+   ("produk terlaris kategori X"), bukan permintaan "buatkan
+   ide/rekomendasi" yang framing-nya terdengar seperti opini padahal
+   tetap bergantung pada fakta penjualan konkret. **Akar masalah:**
+   `ROOT_INSTRUCTION` tidak punya aturan eksplisit untuk pola ini -- baris
+   pembuka instruksi sudah bilang "Tugasmu BUKAN menjawab pertanyaan
+   sendiri", tapi root tetap menafsirkan framing "buatkan rekomendasi
+   promo" sebagai kekecualian yang boleh dijawab sendiri. **Perbaikan:**
+   tambah paragraf baru di `ROOT_INSTRUCTION` (`query.py`) yang eksplisit
+   menyatakan framing kreatif/strategis BUKAN alasan melewati spesialis
+   kalau jawabannya akan menyebut produk/kategori/angka penjualan/harga
+   tertentu -- root WAJIB memanggil spesialis dulu untuk fakta itu, baru
+   menyusun ide di atasnya, dan bagian saran murni (mis. persentase
+   diskon promo) harus ditandai eksplisit sebagai saran, bukan data
+   sistem. **Diverifikasi ulang** dengan pertanyaan identik: root sekarang
+   memanggil `produk_specialist` (yang lalu memanggil `get_top_sellers`
+   untuk beberapa segmen: minuman, makanan, kebutuhan dapur) dan
+   `kategori_specialist`, lalu menyusun 5 ide promo di atas produk/harga/
+   angka-terjual NYATA dari tool -- bukan lagi dikarang murni. Catatan
+   jujur: `verify_and_revise()` tetap mencatat "MASIH MISMATCH" pada
+   giliran ini karena beberapa angka di jawaban akhir adalah hasil
+   aritmatika dari angka tool asli (mis. total harga bundel setelah
+   diskon) yang tidak match persis dengan angka mentah manapun -- ini
+   ekspektasi wajar dari cara kerja checker (bandingkan set angka literal,
+   bukan validasi aritmatika), BUKAN bug baru, dan tidak mengubah
+   kesimpulan bahwa fix ini berhasil (produk/harga/angka-terjual dasarnya
+   sendiri sekarang nyata, bukan dikarang). Belum ditambahkan sebagai
+   kasus regresi permanen di `test_agent_cases.py` -- kandidat tindak
+   lanjut kalau pola serupa ("buatkan ide/rekomendasi berdasar data")
+   muncul lagi di kasus lain.
 
 Detail lengkap ada di `2026-09-05-graph-migration-design.md` (spec) dan
 `2026-09-05-graph-migration-plan.md` (rencana implementasi per-task) --
@@ -660,8 +708,11 @@ cukup dipasang di `ask()` yang sudah ada.
    bukan cuma kasus compound seperti draf awal temuan ini; akar masalah:
    tidak ada `context_cache_config`), dan dropout sintesis cross-sell di
    CP01 (1 dari 4 sampel independen menyebut nol kandidat cross-sell
-   walau tool-nya terpanggil benar) -- lihat bagian 5 di atas untuk detail
-   lengkap ketiga isu ini.
+   walau tool-nya terpanggil benar). **Isu keempat SUDAH diperbaiki:** root
+   melewati delegasi sama sekali untuk permintaan bergaya "buatkan
+   rekomendasi promo" (ditemukan lewat pengujian interaktif pengguna,
+   bukan dari 104 kasus regresi) -- lihat bagian 5 di atas untuk detail
+   lengkap keempat isu ini.
 7. **Context (memori semantik lintas-sesi)** -- **ditunda, keputusan
    sadar**: kanari ukuran sesi (`_warn_if_session_growing()`) dipasang
    sebagai langkah pertama untuk risiko context-window yang lebih nyata;
@@ -677,4 +728,6 @@ cukup dipasang di `ask()` yang sudah ada.
    `produk_specialist` sudah di `query.py`, diverifikasi lewat smoke test
    live dan regresi 104-kasus, lihat bagian 5 untuk detail DAN tiga isu
    diketahui yang masih belum diperbaiki (regresi routing PR04, regresi
-   latensi suite-wide, dropout sintesis cross-sell CP01).
+   latensi suite-wide, dropout sintesis cross-sell CP01) plus satu isu
+   keempat ditemukan pasca-implementasi dan sudah diperbaiki (root
+   melewati delegasi untuk framing "rekomendasi promo").
