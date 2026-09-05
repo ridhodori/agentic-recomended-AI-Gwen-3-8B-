@@ -1,0 +1,18 @@
+# Python venv (agentic_dev/rag-env is itself a venv root)
+Lib/
+Scripts/
+Include/
+pyvenv.cfg
+__pycache__/
+*.pyc
+
+# Data directories (large, regenerated/downloaded, not source)
+chroma_db/
+transaction_data/
+
+# Runtime logs (grow unbounded, not source)
+tool_calls.log
+test_run_stdout.log
+
+# Tool-specific local config
+.claude/
