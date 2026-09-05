@@ -423,6 +423,42 @@ async def get_price_range(segment: str = "") -> str:
     return await asyncio.to_thread(_get_price_range_impl, segment)
 
 
+def _get_peak_hours_impl(segment: str, top_n: int) -> str:
+    df = _load_transactions()
+    if segment.strip():
+        mask = df["product_name"].str.contains(segment, case=False, na=False) | df[
+            "product_category_name_lvl_0"
+        ].str.contains(segment, case=False, na=False)
+        df = df[mask]
+        if df.empty:
+            return f"Tidak ada data penjualan untuk segmen '{segment}'."
+
+    by_hour = df.groupby(df["transaction_time"].dt.hour)["item_qty"].sum()
+    top = by_hour.sort_values(ascending=False).head(top_n)
+
+    if top.empty:
+        return "Tidak ada data jam penjualan."
+
+    return "\n".join(f"- jam {hour:02d}:00-{hour:02d}:59 | terjual: {qty:.0f}x" for hour, qty in top.items())
+
+
+async def get_peak_hours(segment: str = "", top_n: int = 5) -> str:
+    """
+    Find the busiest hours of the day (by net units sold) from raw transaction data,
+    optionally filtered by segment. Useful for staffing or promo-timing decisions.
+
+    Args:
+      segment: Optional product/category keyword to filter by, e.g. "sabun mandi".
+        Empty ("") means use every available transaction, not just one segment.
+      top_n: Number of top hours to return.
+
+    Returns:
+      str: List of the busiest hours (0-23, as recorded in the data) with net units
+        sold, one per line, sorted busiest first.
+    """
+    return await asyncio.to_thread(_get_peak_hours_impl, segment, top_n)
+
+
 ROOT_INSTRUCTION = """Kamu adalah router untuk asisten analisis penjualan retail toko online Alfagift.
 Tugasmu BUKAN menjawab pertanyaan sendiri -- pilih satu atau lebih spesialis
 di bawah ini sesuai jenis pertanyaan, panggil dengan parameter request berisi
@@ -872,6 +908,7 @@ produk_specialist = Agent(
         search_catalog,
         find_cross_sell_candidates,
         get_price_range,
+        get_peak_hours,
     ],
     before_tool_callback=_log_before_tool,
     after_tool_callback=_log_after_tool,
