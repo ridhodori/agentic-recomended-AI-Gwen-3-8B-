@@ -18,7 +18,7 @@ start = time.time()
 for i, (_, row) in enumerate(df.iterrows(), start=1):
     text = f"{row['nama']} | kategori: {row['kategori']} | harga: {row['harga']} | terjual: {row['terjual']:.0f}x | {row['deskripsi']}"
     emb = ollama.embeddings(model="nomic-embed-text", prompt=text)["embedding"]
-    collection.add(ids=[str(row["id"])], embeddings=[emb], documents=[text])
+    collection.upsert(ids=[str(row["id"])], embeddings=[emb], documents=[text])
 
     if i % 50 == 0 or i == total:
         elapsed = time.time() - start
