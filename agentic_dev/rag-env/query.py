@@ -1025,16 +1025,18 @@ def _verify_and_revise_impl(
         return draft_answer  # semua angka cocok -- selesai tanpa panggilan model kedua
 
     prompt = (
-        "Kamu mengecek draft jawaban asisten penjualan terhadap data mentah dari tool "
-        "yang benar-benar dipanggil di giliran ini. Kalau draft SUDAH akurat (semua angka "
-        "dan klaim didukung data tool), ulangi draft itu PERSIS apa adanya, jangan diubah "
-        "sedikit pun. Kalau ADA angka yang tidak cocok dengan data tool, atau klaim yang "
-        "tidak didukung data tool (mis. menyebut suatu produk cocok untuk cross-sell "
-        "padahal tool cross-sell tidak dipanggil/tidak mengembalikan produk itu), revisi "
-        "jawabannya supaya akurat, HANYA berdasarkan data tool ini. Jangan tambahkan "
-        "penjelasan soal proses pengecekan ini ke jawaban akhir -- keluarkan LANGSUNG "
-        "jawaban akhirnya saja (yang asli atau yang sudah direvisi).\n\n"
-        f"DATA TOOL (giliran ini):\n{tool_outputs[:3000]}\n\nDRAFT JAWABAN:\n{draft_answer[:2000]}"
+        "You are checking a sales assistant's draft answer against the raw tool data "
+        "that was actually called this turn. If the draft is ALREADY accurate (every "
+        "number and claim is supported by the tool data), repeat the draft EXACTLY as "
+        "is, do not change anything. If there IS a number that doesn't match the tool "
+        "data, or a claim not supported by the tool data (e.g. claiming a product is "
+        "suitable for cross-selling when the cross-sell tool wasn't called or didn't "
+        "return that product), revise the answer to be accurate, based ONLY on this "
+        "tool data. Do not add any explanation about this checking process to the "
+        "final answer -- output ONLY the final answer itself (the original or the "
+        "revised one). The final answer MUST be written in Bahasa Indonesia "
+        "(Indonesian), regardless of the language of this instruction.\n\n"
+        f"TOOL DATA (this turn):\n{tool_outputs[:3000]}\n\nDRAFT ANSWER:\n{draft_answer[:2000]}"
     )
     try:
         resp = ollama.chat(model=MODEL_LLM.removeprefix("ollama_chat/"), messages=[{"role": "user", "content": prompt}])
