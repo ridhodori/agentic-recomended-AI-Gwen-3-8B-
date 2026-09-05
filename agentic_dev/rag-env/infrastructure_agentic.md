@@ -20,10 +20,13 @@ sumber yang ter-install di `Lib/site-packages/google/adk/` pada venv ini
 > kanari ukuran sesi, loop verifikasi akurasi hybrid (`verify_and_revise()`,
 > dipilih lewat benchmark nyata di `benchmark_verify_loop.py`), dan 4 bug
 > nyata ditemukan+diperbaiki di `query.py` (lihat `rag-setup-windows.md`
-> Known Issues). Graph Bagian 1 & 2 sudah dikonfirmasi (lihat bagian 5) --
-> Bagian 2 langsung diimplementasikan, Bagian 1 (migrasi struktur ke
-> `AgentTool` + spesialis) masih menunggu spec tertulis + implementasi
-> terpisah.
+> Known Issues). Graph Bagian 1 & 2 **sudah diimplementasikan** (lihat
+> bagian 5) -- root sekarang pure router (`tools=[]`,
+> `sub_agents=[kategori_specialist, produk_specialist]`), diverifikasi
+> lewat smoke test live dan regresi penuh 104-kasus (0 error baru), TAPI
+> dua isu diketahui masih belum diperbaiki: regresi routing PR04 (1/104)
+> dan regresi latensi kasus compound (117%-773%, kurang
+> `context_cache_config`) -- lihat bagian 5 untuk detail.
 
 | Lapisan | Status | Implementasi saat ini |
 |---|---|---|
@@ -31,16 +34,18 @@ sumber yang ter-install di `Lib/site-packages/google/adk/` pada venv ini
 | **Context** | Sebagian | RAG (ChromaDB) + data terstruktur (pandas) + sesi persisten (`SqliteSessionService` -> `agent_sessions.db`) ada; memori semantik lintas-sesi belum -- **menunggu keputusan scoping** (lihat bagian Context: desain sesi tunggal-abadi saat ini tidak cocok langsung dengan API `BaseMemoryService` yang berbasis multi-sesi) |
 | **Harness** | Ada | `google-adk` (`Agent` + `Runner` + `LiteLlm` -> Ollama) + `before_tool_callback`/`after_tool_callback` -> `tool_calls.log` + `test_agent_cases.py` (104 kasus regresi otomatis) |
 | **Loop** | Ada | Tool-calling loop (ReAct-style) dari ADK + retry sekali untuk embedding Ollama + `verify_and_revise()` (loop verifikasi akurasi hybrid, dipilih lewat benchmark nyata) |
-| **Graph** | **Desain dikonfirmasi, migrasi struktur belum dikode** | Masih satu agent datar dengan 7 tool; Bagian 1 (routing+spesialis) & Bagian 2 (verifikasi akurasi) dikonfirmasi -- Bagian 2 sudah jalan di `query.py` (`verify_and_revise()`), Bagian 1 masih perlu spec+implementasi terpisah, lihat bagian 5 |
+| **Graph** | **Bagian 1 & 2 diimplementasikan, 2 isu diketahui belum diperbaiki** | Root router (`tools=[]`) + `kategori_specialist` + `produk_specialist`, plus `verify_and_revise()` untuk Bagian 2 -- diverifikasi lewat smoke test live + regresi 104-kasus, lihat bagian 5 untuk detail dan kedua isu terbuka (PR04, latensi compound) |
 
-Baris paling penting: **Graph** benar-benar belum tersentuh sama sekali.
-Konsekuensinya sudah kelihatan langsung selama debugging sesi ini: setiap
-kali ada jenis pertanyaan baru yang salah pilih tool ("kategori tertinggi"
-dijawab dari produk, bukan lewat tool kategori), perbaikannya selalu "tambah
-baris di satu system prompt yang itu-itu juga" -- pola yang makin rapuh
-seiring jumlah tool bertambah (sekarang sudah 7). Ini gejala klasik agent
-tunggal yang mestinya sudah dipecah lewat Graph. Detail & saran ada di
-bagian Graph di bawah.
+Baris ini dulu (sebelum migrasi) berbunyi "**Graph** benar-benar belum
+tersentuh sama sekali" -- sudah tidak berlaku lagi, lihat bagian 5.
+Konsekuensinya waktu itu sudah kelihatan langsung selama debugging sesi
+ini: setiap kali ada jenis pertanyaan baru yang salah pilih tool
+("kategori tertinggi" dijawab dari produk, bukan lewat tool kategori),
+perbaikannya selalu "tambah baris di satu system prompt yang itu-itu
+juga" -- pola yang makin rapuh seiring jumlah tool bertambah (waktu itu
+sudah 7). Ini gejala klasik agent tunggal yang mestinya dipecah lewat
+Graph -- alasan migrasi ini dikerjakan. Detail & status implementasi ada
+di bagian Graph di bawah.
 
 ---
 
@@ -258,7 +263,7 @@ berhenti tercapai.
 
 ---
 
-## 5. Graph — **desain sedang berjalan (belum diimplementasikan)**
+## 5. Graph — **Bagian 1 & 2 diimplementasikan (2 isu diketahui belum diperbaiki)**
 
 **Definisi:** struktur eksplisit (node = agent/langkah, edge = alur
 kontrol/data) untuk mengoordinasikan lebih dari satu agent atau tahap
@@ -450,15 +455,69 @@ sebelumnya justru banyak ditemukan di kode yang *sudah* ditulis dan
 direview manusia. Butuh desain guardrail sendiri (sandboxing eksekusi,
 alur review sebelum tool baru dipercaya) sebelum layak dibangun.
 
-**Status:** Bagian 1 (struktur routing + pengelompokan spesialis, dengan
-catatan tetap dinamis/terbuka menambah spesialis baru) **dikonfirmasi,
-spec tertulis SELESAI** di `2026-09-05-graph-migration-design.md`
-(mekanisme direvisi ke `sub_agents`+`mode="single_turn"`, pengelompokan
-direvisi ke 2 spesialis, plus 2 temuan tambahan: koreksi callback root
-supaya tidak mencemari ground-truth `verify_and_revise`, dan gap konteks
-lintas-giliran karena spesialis kehilangan riwayat percakapan -- lihat
-spec bagian 9-10) -- BELUM diimplementasikan ke kode, menunggu proses
-implementasi (writing-plans). Bagian 2 (loop verifikasi akurasi)
+**Status:** Bagian 1 (struktur routing + pengelompokan spesialis) **sudah
+diimplementasikan** di `query.py`: `root_agent` sekarang pure router
+(`tools=[]`, `sub_agents=[kategori_specialist, produk_specialist]`, pakai
+`sub_agents`+`mode="single_turn"` sesuai revisi mekanisme di spec --
+BUKAN `AgentTool` manual seperti draf awal dokumen ini, lihat
+`2026-09-05-graph-migration-design.md` bagian 2). Pengelompokan final 2
+spesialis (bukan 3 seperti proposal awal di bawah): `kategori_specialist`
+(`get_top_categories`, `get_category_assortment`) dan `produk_specialist`
+(`get_top_sellers`, `get_worst_sellers`, `search_catalog`,
+`find_cross_sell_candidates`, `get_price_range` -- `find_cross_sell_candidates`
+sengaja tetap satu spesialis dengan `get_top_sellers` supaya chaining
+satu-giliran yang sudah diperbaiki sebelumnya tidak pecah, lihat spec
+bagian 3). Root dan spesialis pakai pasangan callback terpisah
+(`_log_before_tool_root`/`_log_after_tool_root` vs `_log_before_tool`/
+`_log_after_tool`) supaya baris log dispatch-routing root tidak pernah
+mencemari kumpulan ground-truth `verify_and_revise` (koreksi yang
+ditemukan saat review Task 1, spec bagian 9). Context lintas-giliran
+(spesialis TIDAK menerima riwayat percakapan sama sekali tiap dipanggil)
+ditangani lewat root yang meresolusi referensi ("itu"/"situ"/"tadi") jadi
+nilai konkret sebelum dispatch ke spesialis -- diverifikasi jalan lewat
+smoke test live (spec bagian 10, Opsi A).
+
+Diverifikasi lewat rangkaian smoke test live (Ollama nyata, bukan mock)
+dan regresi penuh:
+- Routing per-spesialis + separasi log root/spesialis: jalan
+  (`smoke_test_specialists.py`).
+- Chaining tool lintas-panggilan dalam satu spesialis (`get_top_sellers`
+  -> `find_cross_sell_candidates`) tetap jalan (`smoke_test_chaining.py`).
+- Resolusi referensi lintas-giliran (spec bagian 10, Opsi A): root selalu
+  substitusi nilai konkret, tidak pernah meneruskan referensi mentah ke
+  spesialis (`smoke_test_context_handoff.py`).
+- Regresi penuh 104-kasus vs. baseline pra-migrasi
+  (`compare_migration_report.py`, `test_report.jsonl` vs.
+  `test_report_pre_migration.jsonl`): **0 error baru**.
+
+**Dua temuan dari regresi 104-kasus, BELUM diperbaiki, dicatat di sini
+supaya tidak terkubur:**
+
+1. **Regresi routing PR04 (terisolasi, 1/104, tapi nyata):** pertanyaan
+   rentang harga yang memakai kata "kategori" ("berapa harga median
+   kategori Keripik & Kerupuk") salah dirutekan ke `kategori_specialist`
+   (tidak punya tool harga) alih-alih `produk_specialist`, hasilnya
+   penolakan yang salah secara faktual ("data tidak mengandung informasi
+   harga") padahal baseline pra-migrasi menjawab benar. 9 kasus
+   `get_price_range` lainnya tetap rute dan jawab benar baik sebelum
+   maupun sesudah migrasi. **Tindak lanjut:** perketat instruksi routing
+   `ROOT_INSTRUCTION` untuk pertanyaan harga yang memakai kata "kategori",
+   lalu uji ulang.
+2. **Regresi latensi kasus compound:** CP01-CP05 (pertanyaan
+   multi-tool/multi-topik) melambat 117%-773% pasca-migrasi (mis. CP03:
+   16.9s->147.5s) -- jauh melebihi perkiraan spec bagian 8 ("sedikit"
+   waktu tambahan untuk satu hop LLM ekstra). Akar masalah sudah
+   teridentifikasi (belum diperbaiki): agent-agent di `query.py` tidak
+   punya `context_cache_config`, jadi ADK mengirim ulang seluruh prompt
+   tanpa-cache (system instruction + deklarasi tool + histori) tiap kali
+   transfer root->spesialis, alih-alih pakai cache -- dikonfirmasi lewat
+   warning startup ADK sendiri. **Tindak lanjut:** konfigurasikan
+   `context_cache_config` di app/agent, lalu ukur ulang latensi kasus
+   compound.
+
+Detail lengkap ada di `2026-09-05-graph-migration-design.md` (spec) dan
+`2026-09-05-graph-migration-plan.md` (rencana implementasi per-task) --
+tidak diulang semuanya di sini. Bagian 2 (loop verifikasi akurasi)
 **dikonfirmasi DAN diimplementasikan** langsung di `query.py` (lihat di
 atas) karena ternyata tidak bergantung pada migrasi Graph itu sendiri --
 cukup dipasang di `ask()` yang sudah ada.
@@ -490,13 +549,17 @@ cukup dipasang di `ask()` yang sudah ada.
 5. ~~**Loop** -- retry sekali untuk panggilan tool yang rawan
    transient-fail.~~ **Selesai** -- `_embed()` di `query.py` retry sekali
    dengan jeda 1 detik untuk panggilan `ollama.embeddings()`.
-6. **Graph** -- **sedang dikerjakan** (dimulai lebih cepat dari rencana:
-   diputuskan untuk membangun sekarang selagi jumlah tool masih kecil,
-   bukan menunggu sampai jadi masalah). Bagian 1 (struktur routing +
-   pengelompokan spesialis) sudah didesain DAN spec tertulis selesai
-   (`2026-09-05-graph-migration-design.md`) -- menunggu review akhir
-   pemilik proyek atas spec itu, baru lanjut ke implementation plan
-   (writing-plans) -- lihat bagian 5 di atas.
+6. **Graph** -- **Bagian 1 selesai diimplementasikan** (dimulai lebih
+   cepat dari rencana: diputuskan untuk membangun sekarang selagi jumlah
+   tool masih kecil, bukan menunggu sampai jadi masalah). Struktur routing
+   + pengelompokan spesialis (`root_agent` router + `kategori_specialist`
+   + `produk_specialist`) sudah di `query.py`, diverifikasi lewat smoke
+   test live (routing, chaining, resolusi referensi lintas-giliran) dan
+   regresi penuh 104-kasus (0 error baru) -- **tapi dua isu diketahui
+   BELUM diperbaiki**: regresi routing PR04 (1/104, salah rute pertanyaan
+   harga berkata "kategori") dan regresi latensi kasus compound
+   (117%-773%, akar masalah: tidak ada `context_cache_config`) -- lihat
+   bagian 5 di atas untuk detail lengkap kedua isu ini.
 7. **Context (memori semantik lintas-sesi)** -- **ditunda, keputusan
    sadar**: kanari ukuran sesi (`_warn_if_session_growing()`) dipasang
    sebagai langkah pertama untuk risiko context-window yang lebih nyata;
@@ -505,8 +568,11 @@ cukup dipasang di `ask()` yang sudah ada.
 8. ~~**Loop (verifikasi/reflection)**~~ -- **Selesai**: `verify_and_revise()`
    (opsi hybrid, dipilih lewat benchmark nyata di `benchmark_verify_loop.py`),
    lihat bagian 5 #Bagian 2 untuk detail & angka lengkap.
-9. **Graph (migrasi struktur `AgentTool` + spesialis)** -- Bagian 1 & 2
+9. ~~**Graph (migrasi struktur `AgentTool` + spesialis)** -- Bagian 1 & 2
    sudah dikonfirmasi, tapi migrasi struktural itu sendiri (memecah
-   `root_agent` jadi router + spesialis) **belum ditulis ke kode** --
-   masih perlu spec tertulis + proses implementasi terpisah kalau mau
-   dilanjutkan.
+   `root_agent` jadi router + spesialis) belum ditulis ke kode.~~
+   **Selesai** -- `root_agent` router + `kategori_specialist` +
+   `produk_specialist` sudah di `query.py`, diverifikasi lewat smoke test
+   live dan regresi 104-kasus, lihat bagian 5 untuk detail DAN dua isu
+   diketahui yang masih belum diperbaiki (regresi routing PR04, regresi
+   latensi kasus compound).
