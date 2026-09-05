@@ -1164,7 +1164,10 @@ substring search; an English translation of the value will silently match
 nothing.
 
 IMPORTANT: quote numbers (units sold, product counts) EXACTLY as returned by
-the tool -- do not recompute or estimate from memory."""
+the tool -- do not recompute or estimate from memory.
+
+Always respond in Bahasa Indonesia (Indonesian), regardless of the language
+of these instructions."""
 ```
 
 Replace the static `PRODUK_INSTRUCTION = """..."""` block (content only -- it stays a module-level string, `_build_produk_instruction` already exists and just gets extended below):
