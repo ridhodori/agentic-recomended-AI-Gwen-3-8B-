@@ -34,10 +34,11 @@ Catatan implementasi:
     durasi, dan status ke tool_calls.log -- observability minimal supaya
     tool yang lambat/gagal kelihatan tanpa harus baca traceback mentah
     (lihat infrastructure_agentic.md bagian Harness).
-  - instruction Agent adalah callable (_build_instruction), bukan string
-    statis -- menyisipkan jumlah produk katalog/index dan tanggal update
-    ke system prompt tiap giliran (InstructionProvider, lihat
-    infrastructure_agentic.md bagian Prompt).
+  - root_agent menggunakan ROOT_INSTRUCTION (string statis) sebagai router,
+    dan sub-agents (kategori_specialist, produk_specialist) di-wrap otomatis
+    jadi tools oleh ADK model_post_init. produk_specialist menggunakan
+    _build_produk_instruction (callable InstructionProvider) untuk menyisipkan
+    info katalog terkini tiap giliran (lihat infrastructure_agentic.md bagian Prompt).
   - Tiap giliran diakhiri verify_and_revise(): cek murah (regex angka) draft
     jawaban vs data tool MENTAH yang benar-benar dipanggil giliran itu
     (_current_turn_tool_outputs, diisi after_tool_callback) -- cuma eskalasi
@@ -365,54 +366,6 @@ async def get_price_range(segment: str = "") -> str:
     return await asyncio.to_thread(_get_price_range_impl, segment)
 
 
-SYSTEM_PROMPT = """Kamu adalah asisten analisis penjualan retail untuk toko online Alfagift.
-Pengguna akan memberikan sebuah segmen produk (kategori atau kata kunci), atau
-pertanyaan lanjutan yang merujuk ke percakapan sebelumnya.
-
-Tugasmu, pilih tool sesuai jenis pertanyaan:
-1. Kategori secara umum (bukan segmen/produk spesifik) -- "kategori apa yang
-   paling laris" / "kategori mana yang penjualannya paling sedikit" -> tool
-   get_top_categories (parameter terendah=True untuk yang paling sedikit).
-   JANGAN pakai get_top_sellers untuk ini.
-2. Produk terlaris di suatu segmen -> tool get_top_sellers (hasilnya sudah
-   termasuk kategori tiap produk, tidak perlu tool tambahan untuk itu).
-3. Produk paling tidak laku / belum pernah terjual, kandidat didiskontinuasi
-   atau diturunkan harga -> tool get_worst_sellers.
-4. Kategori dengan variasi produk paling sedikit/banyak di katalog (assortment
-   gap) -> tool get_category_assortment.
-5. Rentang harga (termurah/termahal/median) suatu segmen atau kategori ->
-   tool get_price_range (kosongkan segment untuk rentang harga seluruh katalog).
-6. Kalau pertanyaan menyebut "produk mirip/serupa dengan/untuk [X]" -- APAPUN
-   embel-embel tambahannya (mis. "yang penjualannya rendah", "yang lebih
-   laku", "untuk cross-sell") -- pakai tool find_cross_sell_candidates dengan
-   product_name=X. Kalau X belum berupa nama produk konkret (mis. masih berupa
-   nama kategori dari giliran sebelumnya), panggil dulu get_top_sellers atau
-   get_top_categories untuk dapat satu nama produk konkret, LALU langsung
-   panggil find_cross_sell_candidates dengan nama itu di giliran yang sama --
-   jangan berhenti di tool pertama dan menyuruh pengguna mencari sendiri.
-   JANGAN mengklaim suatu produk cocok untuk cross-sell tanpa benar-benar
-   memanggil tool ini untuk membuktikannya.
-7. Pakai tool search_catalog kalau butuh detail tambahan soal suatu produk.
-
-Data transaksi TIDAK punya kolom waktu/tanggal -- kalau pengguna menanyakan hal
-bertema waktu, termasuk yang tidak eksplisit menyebut satuan waktu (mis.
-"penjualan minggu ini", "tren bulan lalu", "kategori apa yang lagi tren/naik
-daun sekarang", "produk apa yang lagi hits/viral", "belakangan ini", "terkini"),
-jangan memanggil tool apa pun untuk mengarang jawaban; katakan terus terang itu
-tidak bisa dijawab dari data yang tersedia (data hanya berisi total akumulasi,
-bukan tren dari waktu ke waktu). Boleh tawarkan alternatif yang benar-benar
-bisa dijawab, mis. "kategori dengan penjualan tertinggi secara keseluruhan
-(bukan tren terkini)", tapi jangan sajikan angka total sebagai kalau itu tren.
-
-PENTING: kutip angka (harga, jumlah terjual, jumlah produk) PERSIS seperti yang
-dikembalikan tool -- jangan menyusun ulang atau menaksir dari ingatan. Kalau butuh
-angka yang belum ada di hasil tool manapun, panggil tool yang sesuai dulu, jangan
-mengarang.
-
-Susun rekomendasi akhir yang jelas dan actionable dalam Bahasa Indonesia: sebutkan
-produk/kategori yang relevan dan alasannya singkat."""
-
-
 ROOT_INSTRUCTION = """Kamu adalah router untuk asisten analisis penjualan retail toko online Alfagift.
 Tugasmu BUKAN menjawab pertanyaan sendiri -- pilih satu atau lebih spesialis
 di bawah ini sesuai jenis pertanyaan, panggil dengan parameter request berisi
@@ -509,20 +462,6 @@ def _build_produk_instruction(context) -> str:
     katalog_mtime = datetime.fromtimestamp(os.path.getmtime(KATALOG_CSV)).strftime("%Y-%m-%d")
     return (
         f"{PRODUK_INSTRUCTION}\n\n"
-        f"Info katalog saat ini: {len(katalog_df)} produk terdaftar, "
-        f"{collection.count()} di antaranya sudah ter-index untuk pencarian semantik "
-        f"(search_catalog/find_cross_sell_candidates), data katalog terakhir diperbarui {katalog_mtime}."
-    )
-
-
-def _build_instruction(context) -> str:
-    """InstructionProvider: menyisipkan info katalog terkini ke system prompt
-    tiap giliran, supaya angka jumlah produk/index tidak perlu ditulis ulang
-    manual tiap kali katalog di-refresh (lihat infrastructure_agentic.md
-    bagian Prompt). Akan diubah di Task 2 untuk menggunakan ROOT_INSTRUCTION."""
-    katalog_mtime = datetime.fromtimestamp(os.path.getmtime(KATALOG_CSV)).strftime("%Y-%m-%d")
-    return (
-        f"{SYSTEM_PROMPT}\n\n"
         f"Info katalog saat ini: {len(katalog_df)} produk terdaftar, "
         f"{collection.count()} di antaranya sudah ter-index untuk pencarian semantik "
         f"(search_catalog/find_cross_sell_candidates), data katalog terakhir diperbarui {katalog_mtime}."
@@ -694,19 +633,12 @@ produk_specialist = Agent(
 root_agent = Agent(
     model=LiteLlm(model=MODEL_LLM, num_ctx=8192),
     name="sales_recommender",
-    description="Asisten analisis penjualan & rekomendasi cross-sell untuk katalog Alfagift.",
-    instruction=_build_instruction,
-    tools=[
-        search_catalog,
-        get_top_sellers,
-        find_cross_sell_candidates,
-        get_top_categories,
-        get_worst_sellers,
-        get_category_assortment,
-        get_price_range,
-    ],
-    before_tool_callback=_log_before_tool,
-    after_tool_callback=_log_after_tool,
+    description="Router: memilih spesialis kategori atau produk yang relevan untuk analisis penjualan & rekomendasi cross-sell katalog Alfagift.",
+    instruction=ROOT_INSTRUCTION,
+    tools=[],
+    sub_agents=[kategori_specialist, produk_specialist],
+    before_tool_callback=_log_before_tool_root,
+    after_tool_callback=_log_after_tool_root,
 )
 
 APP_NAME = "alfagift_sales_agent"
