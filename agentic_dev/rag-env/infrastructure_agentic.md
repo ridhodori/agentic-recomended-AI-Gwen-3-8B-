@@ -287,7 +287,7 @@ secara struktural, bukan menambal lagi.
 
 ### Desain yang disepakati (bagian 1: struktur routing)
 
-**Mekanisme: `google.adk.tools.agent_tool.AgentTool`, BUKAN
+**Mekanisme (proposal awal -- REVISI, lihat spec bagian 2): `google.adk.tools.agent_tool.AgentTool`, BUKAN
 `transfer_to_agent`.** `AgentTool` membungkus sebuah `Agent` supaya bisa
 dipanggil seperti tool biasa oleh agent lain -- panggil, terima hasil,
 kontrol tetap di pemanggil. `transfer_to_agent` sebaliknya adalah
@@ -295,15 +295,24 @@ one-way handoff (sub-agent mengambil alih sisa giliran, tidak
 mengembalikan kontrol) -- ini akan merusak kebiasaan agent sekarang yang
 rutin menggabungkan hasil beberapa tool jadi satu jawaban (mis. produk
 terlaris + kategorinya + kandidat cross-sell dalam satu respons). Karena
-itu `AgentTool` yang dipilih, meski `transfer_to_agent` sempat disebut di
-draf awal dokumen ini sebelum perbedaan ini diverifikasi ke kode sumber.
+itu `AgentTool` yang dipilih di proposal awal ini, meski `transfer_to_agent`
+sempat disebut di draf awal dokumen ini sebelum perbedaan ini diverifikasi
+ke kode sumber. **Direvisi saat implementasi (lihat Status di bawah):**
+mekanisme akhir yang benar-benar dipakai di `query.py` adalah
+`sub_agents`+`mode="single_turn"`, BUKAN `AgentTool` manual seperti di
+atas -- `AgentTool` ternyata didiskon (discouraged) di versi `google-adk`
+yang terpasang, lihat `2026-09-05-graph-migration-design.md` bagian 2
+untuk detail lengkap dan alasannya.
 
 **Root agent jadi pure router:** `sales_recommender` tidak lagi punya
-tool data langsung sama sekali -- semua 7 tool pindah ke spesialis,
-`tools=[]` root cuma berisi `AgentTool` yang membungkus tiap spesialis.
-Root hanya bertugas memilih spesialis mana yang relevan dan menyusun hasil
-akhirnya. Ini yang membuat prompt root tetap pendek berapa pun jumlah tool
-di dalam tiap spesialis bertambah nanti.
+tool data langsung sama sekali -- semua 7 tool pindah ke spesialis. Di
+proposal awal ini, `tools=[]` root cuma berisi `AgentTool` yang
+membungkus tiap spesialis (**REVISI, lihat spec bagian 2:** implementasi
+akhir memakai `sub_agents=[kategori_specialist, produk_specialist]`
+langsung, bukan `AgentTool` -- lihat Status di bawah). Root hanya
+bertugas memilih spesialis mana yang relevan dan menyusun hasil akhirnya.
+Ini yang membuat prompt root tetap pendek berapa pun jumlah tool di dalam
+tiap spesialis bertambah nanti.
 
 **Pengelompokan spesialis -- REVISI, lihat spec detail:** tabel 3-spesialis
 di bawah ini adalah proposal AWAL dan sudah DIREVISI jadi 2 spesialis di
@@ -325,12 +334,16 @@ besar seperti sekarang.
 
 **Dikonfirmasi (dengan catatan "dinamis"):** pemilik proyek meminta
 pengelompokan ini tetap terbuka menambah lebih dari 3 domain seiring
-bertambahnya tool, bukan dikunci selamanya di 3. Ini sudah otomatis
-didukung oleh mekanisme `AgentTool` di atas -- `root_agent.tools` cuma
+bertambahnya tool, bukan dikunci selamanya di 3. Di proposal awal ini, itu
+didukung otomatis oleh mekanisme `AgentTool` -- `root_agent.tools` cuma
 berupa list `AgentTool`, jadi menambah spesialis ke-4/ke-5 nanti = definisikan
 `Agent` baru + tambahkan `AgentTool`-nya ke list, TANPA merestrukturisasi
-spesialis yang sudah ada. Tabel 3-domain di atas jadi konfigurasi AWAL untuk
-7 tool yang ada sekarang, bukan plafon arsitektur.
+spesialis yang sudah ada (**REVISI, lihat spec bagian 2:** implementasi
+akhir memakai `sub_agents=[...]` langsung, bukan `AgentTool` -- prinsip
+"tambah spesialis = tambah satu entri ke list" tetap sama persis, cuma
+listnya `sub_agents` bukan daftar `AgentTool`). Tabel 3-domain di atas
+jadi konfigurasi AWAL untuk 7 tool yang ada sekarang, bukan plafon
+arsitektur.
 
 ### Bagian 2 (selesai -- diimplementasikan): loop verifikasi akurasi
 
