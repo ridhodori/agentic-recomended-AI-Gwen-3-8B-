@@ -984,6 +984,14 @@ _tool_call_started_at: dict[int, float] = {}
 # giliran sekaligus (tidak ada turn paralel).
 _current_turn_tool_outputs: list[str] = []
 
+# Pertanyaan ASLI level-root giliran ini (bukan `request` yang diteruskan
+# root ke spesialis) -- diisi di awal ask(), dipakai _maybe_correct_per_day_miss
+# utk deteksi sinyal per-hari TANPA bergantung pada tool_context.user_content
+# (semantiknya utk sub-agent bertingkat tidak dikonfirmasi, sedangkan pola
+# variabel-global "current turn" ini sudah terbukti aman di
+# _current_turn_tool_outputs). Aman tanpa lock dengan alasan yang sama.
+_current_turn_question: str = ""
+
 
 def _log_before_tool(tool, args, tool_context) -> None:
     _tool_call_started_at[id(tool_context)] = time.monotonic()
@@ -1004,10 +1012,13 @@ def _write_tool_log_line(tool, args, tool_context, tool_response) -> None:
         f.write(line)
 
 
-def _log_after_tool(tool, args, tool_context, tool_response) -> None:
+def _log_after_tool(tool, args, tool_context, tool_response):
+    corrected = _maybe_correct_per_day_miss(tool, args, _current_turn_question)
+    if corrected is not None:
+        tool_response = corrected
     _write_tool_log_line(tool, args, tool_context, tool_response)
     _current_turn_tool_outputs.append(str(tool_response))
-    return None
+    return corrected
 
 
 def _log_before_tool_root(tool, args, tool_context) -> None:
@@ -1041,16 +1052,14 @@ def _extract_numbers(text: str) -> set[str]:
     return {n.replace(".", "").replace(",", "") for n in _NUM_RE.findall(text)}
 
 
-# Kanari murah (observability only, TIDAK mengubah jawaban) untuk kasus yang
-# ditemukan lewat pengujian 200-kasus (2026-09-06): pertanyaan yang eksplisit
-# minta breakdown per hari kadang tetap dijawab pakai get_top_sellers (satu
-# ranking gabungan) alih-alih get_top_sellers_by_day, meski PRODUK_INSTRUCTION
-# sudah diperjelas jadi aturan berbasis kata kunci murni -- sisa miss-rate
-# ini kemungkinan besar variabilitas model 8B lokal yang probabilistik (bukan
-# lagi ambiguitas instruksi seperti sebelumnya), jadi didokumentasikan lewat
-# log di sini dulu (pola yang sama seperti _warn_if_session_growing) alih-alih
-# langsung membangun mekanisme auto-retry yang lebih kompleks tanpa bukti
-# seberapa sering ini benar-benar terjadi di pemakaian nyata.
+# Awalnya kanari observability-only (2026-09-06, lihat commit sebelumnya),
+# TAPI eksperimen temperature (rag-setup-windows.md Known Issues) membuktikan
+# sisa miss-rate get_top_sellers vs get_top_sellers_by_day BUKAN cuma noise
+# acak yang bisa dihilangkan dengan tuning sampling -- untuk sebagian
+# parafrase, jawaban PALING MUNGKIN model itu sendiri memang salah. Instruksi
+# & sampling-parameter sudah dicoba dan terbukti tidak cukup, jadi backstop di
+# sini naik level jadi KOREKSI AKTIF (lihat _maybe_correct_per_day_miss di
+# bawah), bukan cuma log.
 _PER_DAY_SIGNAL_RE = re.compile(
     r"\bper\s*hari\b|\btiap\s*hari\b|\bsetiap\s*hari\b|\bharian\b|\bper\s*day\b|"
     r"\bmasing-masing\s*hari\b|\bdipisah\s*per\s*hari\b",
@@ -1064,17 +1073,63 @@ _PER_DAY_SIGNAL_RE = re.compile(
 _DAY_HEADER_RE = re.compile(r"^\d{4}-\d{2}-\d{2}:\s*$", re.MULTILINE)
 
 
+def _maybe_correct_per_day_miss(tool, args: dict, question: str) -> str | None:
+    """Jaring pengaman DETERMINISTIK (bukan cuma log) -- dipanggil dari
+    _log_after_tool SEBELUM spesialis sempat menulis jawaban dari data yang
+    salah. Kalau: (a) tool yang terpanggil get_top_sellers (bukan
+    get_top_sellers_by_day), (b) argumennya benar-benar rentang multi-hari
+    (start_date != end_date, keduanya terisi), DAN (c) pertanyaan asli
+    menyebut sinyal per-hari eksplisit -- hitung ulang lewat
+    _get_top_sellers_by_day_impl dengan ARGUMEN YANG SAMA, dan kembalikan
+    hasilnya untuk MENGGANTI tool_response yang salah (lihat kontrak
+    after_tool_callback di google/adk/flows/llm_flows/functions.py: "Step 6,
+    if alternative response exists from after_tool_callback, use it instead
+    of the original function response" -- dikonfirmasi lewat pembacaan
+    langsung source terinstall, bukan diasumsikan dari dokumentasi).
+
+    Mengembalikan None kalau tidak ada yang perlu dikoreksi (get_top_sellers
+    memang tool yang benar untuk pertanyaan ini) -- _log_after_tool lalu
+    memakai tool_response asli seperti biasa."""
+    if tool.name != "get_top_sellers":
+        return None
+    start_date = (args or {}).get("start_date") or ""
+    end_date = (args or {}).get("end_date") or ""
+    if not start_date or not end_date or start_date == end_date:
+        return None  # bukan rentang multi-hari nyata -- get_top_sellers sudah tool yang benar
+    if not _PER_DAY_SIGNAL_RE.search(question):
+        return None  # tidak ada sinyal per-hari eksplisit -- get_top_sellers memang yang diminta
+
+    segment = (args or {}).get("segment") or ""
+    top_n = (args or {}).get("top_n") or 5
+    corrected = _get_top_sellers_by_day_impl(segment, top_n, start_date, end_date)
+    with open(TOOL_LOG_PATH, "a", encoding="utf-8") as f:
+        f.write(
+            f"NOTE {datetime.now().isoformat(timespec='seconds')} | _log_after_tool | "
+            f"PER-HARI AUTO-DIKOREKSI -- pertanyaan menyebut sinyal per-hari eksplisit tapi "
+            f"model memanggil get_top_sellers (ranking gabungan) bukan get_top_sellers_by_day -- "
+            f"tool_response diganti otomatis dengan hasil get_top_sellers_by_day (argumen sama) "
+            f"SEBELUM spesialis menulis jawaban. question={question!r} args={args}\n"
+        )
+    return corrected
+
+
 def _log_possible_per_day_miss(question: str, tool_outputs: str) -> None:
+    """Jaring pengaman KEDUA (defense-in-depth) -- seharusnya jarang menyala
+    sekarang karena _maybe_correct_per_day_miss sudah mengoreksi kasus yang
+    sama SEBELUM giliran ini selesai. Kalau baris ini tetap muncul di
+    tool_calls.log, berarti ada kombinasi yang lolos dari koreksi aktif (mis.
+    tool/argumen berbeda dari yang diantisipasi) -- sinyal untuk investigasi
+    lebih lanjut, bukan kegagalan yang diam-diam terkirim ke pengguna."""
     if not tool_outputs.strip():
         return  # nol tool dipanggil -- kemungkinan penolakan sah, bukan cakupan kanari ini
     if _PER_DAY_SIGNAL_RE.search(question) and not _DAY_HEADER_RE.search(tool_outputs):
         with open(TOOL_LOG_PATH, "a", encoding="utf-8") as f:
             f.write(
                 f"NOTE {datetime.now().isoformat(timespec='seconds')} | verify_and_revise | "
-                f"KEMUNGKINAN PER-HARI MISS -- pertanyaan menyebut sinyal per-hari "
-                f"('per hari'/'tiap hari'/'setiap hari'/dst.) tapi tool_outputs giliran ini "
-                f"tidak berisi header tanggal (format get_top_sellers_by_day) -- kemungkinan "
-                f"get_top_sellers (ranking gabungan) terpanggil padahal breakdown per hari diminta. "
+                f"KEMUNGKINAN PER-HARI MISS (LOLOS DARI KOREKSI AKTIF) -- pertanyaan menyebut "
+                f"sinyal per-hari tapi tool_outputs giliran ini tidak berisi header tanggal, "
+                f"padahal _maybe_correct_per_day_miss seharusnya sudah menangani kasus ini -- "
+                f"cek args tool yang sebenarnya terpanggil di baris tool_calls.log sebelumnya. "
                 f"question={question!r}\n"
             )
 
@@ -1375,7 +1430,9 @@ def _warn_if_session_growing(session) -> None:
 
 
 async def ask(runner, query, user_id=USER_ID, session_id=SESSION_ID):
+    global _current_turn_question
     _current_turn_tool_outputs.clear()
+    _current_turn_question = query
     content = types.Content(role="user", parts=[types.Part(text=query)])
     final_text = "(tidak ada respons)"
     async for event in runner.run_async(user_id=user_id, session_id=session_id, new_message=content):
