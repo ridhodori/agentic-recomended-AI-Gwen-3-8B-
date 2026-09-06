@@ -219,25 +219,30 @@ def _filter_by_date(df: pd.DataFrame, start_date: str, end_date: str) -> tuple[p
     return df[mask], ""
 
 
-def _get_top_sellers_impl(segment: str, top_n: int, start_date: str, end_date: str) -> str:
-    if not segment.strip():
-        return "Segmen kosong, tidak bisa mencari produk terlaris."
-
-    df = _load_transactions()
-    df, date_error = _filter_by_date(df, start_date, end_date)
-    if date_error:
-        return date_error
-
-    mask = df["product_name"].str.contains(segment, case=False, na=False) | df[
+def _segment_mask(df: pd.DataFrame, segment: str) -> pd.Series:
+    return df["product_name"].str.contains(segment, case=False, na=False) | df[
         "product_category_name_lvl_0"
     ].str.contains(segment, case=False, na=False)
-    filtered = df[mask]
 
+
+def _filter_by_segment(df: pd.DataFrame, segment: str) -> tuple[pd.DataFrame, str]:
+    """Filter df by segment keyword (product name OR category, case-insensitive
+    substring). Empty segment means NO filter -- whole df is used as-is, same
+    convention as get_worst_sellers/get_peak_hours/get_trending_products
+    (segment is a narrowing filter, not a mandatory argument -- a plain "top N
+    terlaris" question with no product/category named is a normal, answerable
+    request, not an error)."""
+    if not segment.strip():
+        return df, ""
+    filtered = df[_segment_mask(df, segment)]
     if filtered.empty:
-        return f"Tidak ada data penjualan untuk segmen '{segment}'."
+        return filtered, f"Tidak ada data penjualan untuk segmen '{segment}'."
+    return filtered, ""
 
-    top = (
-        filtered.groupby("product_name")
+
+def _rank_products(df: pd.DataFrame, top_n: int) -> pd.DataFrame:
+    return (
+        df.groupby("product_name")
         .agg(
             terjual=("item_qty", "sum"),
             harga=("product_price", "first"),
@@ -246,20 +251,43 @@ def _get_top_sellers_impl(segment: str, top_n: int, start_date: str, end_date: s
         .sort_values("terjual", ascending=False)
         .head(top_n)
     )
+
+
+def _format_ranked_products(top: pd.DataFrame) -> str:
     return "\n".join(
         f"- {name} | kategori: {row.kategori} | terjual: {row.terjual:.0f}x | harga: {row.harga:.0f}"
         for name, row in top.iterrows()
     )
 
 
+def _get_top_sellers_impl(segment: str, top_n: int, start_date: str, end_date: str) -> str:
+    df = _load_transactions()
+    df, date_error = _filter_by_date(df, start_date, end_date)
+    if date_error:
+        return date_error
+
+    df, segment_error = _filter_by_segment(df, segment)
+    if segment_error:
+        return segment_error
+
+    top = _rank_products(df, top_n)
+    if top.empty:
+        return "Tidak ada data penjualan."
+    return _format_ranked_products(top)
+
+
 async def get_top_sellers(
-    segment: str, top_n: int = 5, start_date: str = "", end_date: str = ""
+    segment: str = "", top_n: int = 5, start_date: str = "", end_date: str = ""
 ) -> str:
     """
-    Find best-selling products from raw transaction data, filtered by segment.
+    Find best-selling products from raw transaction data, optionally filtered by
+    segment. Returns ONE combined ranking for the whole date range -- if the
+    request wants a separate ranking PER DAY (e.g. "top N terlaris per hari"),
+    use get_top_sellers_by_day instead.
 
     Args:
       segment: Product/category keyword to filter by, e.g. "sabun mandi" or "minuman".
+        Empty ("") means no filter -- rank across every product, not just one segment.
       top_n: Number of top-selling products to return.
       start_date: Optional start date (YYYY-MM-DD), inclusive. Empty ("") means no
         lower bound -- use every available date.
@@ -271,6 +299,61 @@ async def get_top_sellers(
         subtracted), and price, one per line.
     """
     return await asyncio.to_thread(_get_top_sellers_impl, segment, top_n, start_date, end_date)
+
+
+def _get_top_sellers_by_day_impl(segment: str, top_n: int, start_date: str, end_date: str) -> str:
+    """Sama seperti _get_top_sellers_impl, TAPI mengembalikan ranking TERPISAH
+    per tanggal yang benar-benar ada dalam rentang (bukan satu ranking gabungan
+    utk seluruh rentang) -- lihat catatan bug di 2026-09-06-transaction-data-v2
+    -design.md: rentang 2026-08-01 s.d. 2026-08-03 yang di-agregasi jadi SATU
+    ranking bisa berbeda nyata dari ranking tiap hari (produk yang top-2 di
+    hari pertama bisa saja bukan top-2 lagi di hari lain), jadi collapse ke
+    satu angka menyesatkan untuk pertanyaan yang eksplisit minta "per hari"."""
+    df = _load_transactions()
+    df, date_error = _filter_by_date(df, start_date, end_date)
+    if date_error:
+        return date_error
+
+    df, segment_error = _filter_by_segment(df, segment)
+    if segment_error:
+        return segment_error
+
+    lines = []
+    for day in sorted(df["transaction_time"].dt.date.unique()):
+        top = _rank_products(df[df["transaction_time"].dt.date == day], top_n)
+        lines.append(f"{day}:")
+        if top.empty:
+            lines.append("  (tidak ada data penjualan)")
+        else:
+            lines.extend(f"  {line}" for line in _format_ranked_products(top).splitlines())
+    return "\n".join(lines)
+
+
+async def get_top_sellers_by_day(
+    segment: str = "", top_n: int = 5, start_date: str = "", end_date: str = ""
+) -> str:
+    """
+    Find best-selling products from raw transaction data, broken down into a
+    SEPARATE ranking for EACH calendar day in the range -- use this instead of
+    get_top_sellers whenever the request explicitly asks for a PER-DAY
+    breakdown (e.g. "top N terlaris per hari/tiap hari/setiap hari" or names
+    more than one specific date), since a single combined ranking across
+    multiple days can hide which product actually led on each individual day.
+
+    Args:
+      segment: Product/category keyword to filter by, e.g. "sabun mandi" or "minuman".
+        Empty ("") means no filter -- rank across every product, not just one segment.
+      top_n: Number of top-selling products to return per day.
+      start_date: Optional start date (YYYY-MM-DD), inclusive. Empty ("") means no
+        lower bound -- use every available date.
+      end_date: Optional end date (YYYY-MM-DD), inclusive. Empty ("") means no upper
+        bound -- use every available date.
+
+    Returns:
+      str: For each day in the range, the day's date followed by its best-selling
+        products (category, net units sold, price), one day after another.
+    """
+    return await asyncio.to_thread(_get_top_sellers_by_day_impl, segment, top_n, start_date, end_date)
 
 
 def _find_cross_sell_candidates_impl(product_name: str, top_k: int) -> str:
@@ -747,11 +830,20 @@ You receive a request that is ALREADY self-contained (no other conversation
 history needed) from the router -- answer directly based on that request.
 
 Your job, pick the tool that matches the request type:
-1. Best-selling products in a segment -> get_top_sellers (the result already
-   includes each product's category, no extra tool needed for that). Pass
-   start_date/end_date (YYYY-MM-DD) if the request names a specific date or
-   date range; leave both empty ("") to use every available date (the
-   default -- not a special case).
+1. Best-selling products, in a segment or overall -> get_top_sellers (the
+   result already includes each product's category, no extra tool needed for
+   that). Segment is OPTIONAL -- leave it empty ("") for a plain "top N
+   terlaris" request that does not name any product/category, this is a
+   normal request, not an error. Pass start_date/end_date (YYYY-MM-DD) if the
+   request names a specific date or date range; leave both empty ("") to use
+   every available date (the default -- not a special case). If the request
+   explicitly wants a breakdown PER DAY (e.g. "per hari", "tiap hari",
+   "setiap hari", or names more than one specific date) instead of one
+   combined ranking for the whole range, use get_top_sellers_by_day instead --
+   a single ranking collapsed across multiple days can hide which product
+   actually led on each individual day, so never substitute get_top_sellers
+   with a wide start_date/end_date range when a per-day breakdown was asked
+   for.
 2. Least-selling / never-sold products, candidates for discontinuation or a
    price cut -> get_worst_sellers.
 3. Price range (cheapest/most expensive/median) for a segment or category ->
@@ -927,6 +1019,7 @@ _SUSPICIOUS_NUM_THRESHOLD = 3
 _DATA_TOOL_NAMES = {
     "search_catalog",
     "get_top_sellers",
+    "get_top_sellers_by_day",
     "find_cross_sell_candidates",
     "get_top_categories",
     "get_worst_sellers",
@@ -1150,6 +1243,7 @@ produk_specialist = Agent(
     mode="single_turn",
     tools=[
         get_top_sellers,
+        get_top_sellers_by_day,
         get_worst_sellers,
         search_catalog,
         find_cross_sell_candidates,

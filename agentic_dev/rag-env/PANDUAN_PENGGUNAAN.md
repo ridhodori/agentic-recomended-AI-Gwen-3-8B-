@@ -55,7 +55,8 @@ rag-setup-windows.md](rag-setup-windows.md#tools-yang-tersedia) untuk daftar
 tool lengkapnya):
 
 - "Kategori apa yang paling laris?" / "kategori mana yang penjualannya paling sedikit?"
-- "Produk terlaris di kategori sabun mandi?"
+- "Produk terlaris di kategori sabun mandi?" (segmen boleh dikosongkan untuk "top N produk terlaris" secara umum, lintas seluruh katalog)
+- "Top 2 produk terlaris per hari untuk tanggal 2026-08-01 dan 2026-08-03?" (breakdown TERPISAH per tanggal, bukan satu ranking gabungan untuk seluruh rentang)
 - "Produk apa yang paling tidak laku / belum pernah terjual?"
 - "Kategori mana yang variasi produknya paling sedikit?" (assortment gap)
 - "Berapa rentang harga produk di kategori minuman?" (atau seluruh katalog kalau segmen dikosongkan)
