@@ -12,21 +12,23 @@ sumber yang ter-install di `Lib/site-packages/google/adk/` pada venv ini
 
 ---
 
-## ⚠️ Peringatan: proses yang sedang berjalan saat ini memakai kode LAMA
+## ⚠️ Peringatan (RESOLVED 2026-09-06 sore): proses lama sempat berjalan lagi
 
-**STATUS TERBARU (2026-09-06, sore -- ditemukan lagi lewat pengecekan
-langsung proses hidup, BUKAN cuma asumsi dari peringatan lama di bawah):**
-proses ini MASIH berjalan sekarang, dengan PID BARU (24596, dimulai
-06/09/2026 12:13, jadi proses ini di-restart entah oleh siapa SETELAH
-peringatan asli di bawah ini ditulis pagi harinya dengan PID 26944) --
-tindak lanjut yang disarankan sejak pagi ("hentikan proses lama itu")
-**belum pernah dieksekusi**. Dalam rentang waktu proses baru ini berjalan,
-SATU fix-wave besar lagi masuk ke `main` (`40f40b2`..`d132c52`, lihat
-bagian 7) -- `get_top_sellers_by_day`, perbaikan segmen kosong, perbaikan
-routing per-hari, dan koreksi deterministik -- yang proses worktree ini
-JUGA tidak punya, DITAMBAH dari sebelumnya. Kalau proses inilah yang
-sungguhan dipakai untuk bertanya, seluruh pekerjaan hari ini (bagian 6 DAN
-bagian 7) tidak akan terasa efeknya sama sekali.
+**RESOLVED:** proses stale ini di-restart entah oleh siapa/apa (PID BARU
+24596, dimulai 06/09/2026 12:13) SETELAH peringatan asli di bawah ditulis
+pagi harinya (PID 26944) dan setelah tindak lanjut "hentikan proses lama
+itu" sempat direkomendasikan tapi tidak dieksekusi. Ditemukan lagi lewat
+pengecekan langsung proses hidup di sesi sore ini (bukan asumsi), diajukan
+ke pengguna, DIKONFIRMASI bukan proses yang sengaja dipakai ("no im not
+actually just use the newest and the most fix one") -- **dihentikan**
+(`Stop-Process` pada PID 24596 dan child-nya 7400, dikonfirmasi tidak ada
+`python.exe` tersisa). Worktree `D:/agentic/.worktrees/graph-migration/`
+sendiri BELUM dihapus (`git worktree remove` tetap keputusan destructive
+terpisah, belum diminta) -- jadi proses ini BISA di-restart lagi kalau ada
+yang menjalankan `python query.py` dari sana tanpa sadar itu bukan `main`.
+Kalau ini terjadi lagi, cek dulu working tree-nya (`Get-CimInstance
+Win32_Process -Filter "name='python.exe'"` -> lihat `ExecutablePath`)
+sebelum asumsi kode yang jalan sudah yang terbaru.
 
 **Peringatan asli (ditulis pagi hari, 2026-09-06, PID 26944):** ada proses
 `python query.py` yang berjalan dari working tree
@@ -54,16 +56,15 @@ transaksi v2 (`ca6ae2f` dst.). Konsekuensinya:
   dikerjakan di satu working tree, tapi proses yang sungguhan dipakai jalan
   dari working tree lain.
 
-**Tindak lanjut yang disarankan (MASIH belum dieksekusi -- keputusan
-pemilik proyek, ditanyakan ulang secara eksplisit di sesi 2026-09-06 sore):**
-hentikan proses lama itu (PID 24596 per pengecekan terakhir), lalu jalankan
-`python query.py` dari `D:/agentic/agentic_dev/rag-env/` (checkout `main`,
-yang sudah punya semua perbaikan sampai `d132c52`). Kalau worktree
-`graph-migration` sudah tidak dipakai lagi untuk pengembangan aktif (semua
-isinya sudah ter-merge ke `main`), pertimbangkan juga `git worktree remove`
-untuk itu supaya tidak ada working tree basi yang bisa ke-restart lagi
-tanpa sadar -- tapi ini keputusan destructive, jangan dieksekusi otomatis
-tanpa konfirmasi eksplisit.
+**Tindak lanjut:** proses lama (PID 24596 + child 7400) sudah **dihentikan**
+di sesi 2026-09-06 sore, dikonfirmasi pengguna bukan proses yang sengaja
+dipakai. Jalankan `python query.py` dari `D:/agentic/agentic_dev/rag-env/`
+(checkout `main`, yang sudah punya semua perbaikan sampai `d132c52`) kalau
+mau berinteraksi dengan agen -- itu bukan proses yang berjalan otomatis di
+belakang, harus dimulai manual tiap kali. Worktree `graph-migration`
+SENDIRI belum dihapus (`git worktree remove` tetap keputusan destructive
+terpisah, belum diminta secara eksplisit) -- kalau ini masih perlu
+dikerjakan, tanyakan dulu sebelum eksekusi.
 
 ---
 
