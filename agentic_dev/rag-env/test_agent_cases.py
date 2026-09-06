@@ -152,10 +152,14 @@ CASES = [
     ("LD03", "language_drift", ["cari susu cair rendah lemak yang lagi trending"], ["get_trending_products"], "'susu'='milk' -- cek jawaban bukan penolakan kosong"),
 
     # --- Edge cases: refusal bertema waktu (HARUS tidak pakai tool) (4) ---
-    ("EDW01", "edge_waktu", ["penjualan minggu ini gimana"], [], "harus menolak, tidak ada kolom timestamp"),
-    ("EDW02", "edge_waktu", ["tren penjualan bulan lalu apa"], [], "harus menolak, tidak ada kolom timestamp"),
-    ("EDW03", "edge_waktu", ["produk apa yang laku hari ini"], [], "harus menolak, tidak ada kolom timestamp"),
-    ("EDW04", "edge_waktu", ["bagaimana penjualan tahun ini dibanding tahun lalu"], [], "harus menolak, tidak ada kolom timestamp"),
+    # Catatan: kolom transaction_time ADA sejak branch ini (bukan lagi alasan
+    # penolakan) -- yang bikin ini tetap harus ditolak adalah rentang data yang
+    # cuma ~3 hari (transaction_day1-3.csv), jadi frasa relatif ("minggu ini",
+    # "bulan lalu", "tahun ini") cakupannya tidak jelas/pasti di luar rentang itu.
+    ("EDW01", "edge_waktu", ["penjualan minggu ini gimana"], [], "harus menolak, frasa relatif ('minggu ini') yang cakupannya tidak jelas dengan data cuma ~3 hari"),
+    ("EDW02", "edge_waktu", ["tren penjualan bulan lalu apa"], [], "harus menolak, frasa relatif ('bulan lalu') jelas di luar rentang data yang cuma ~3 hari"),
+    ("EDW03", "edge_waktu", ["produk apa yang laku hari ini"], [], "harus menolak, 'hari ini' (tanggal berjalan) tidak pasti termasuk dalam rentang data yang cuma ~3 hari"),
+    ("EDW04", "edge_waktu", ["bagaimana penjualan tahun ini dibanding tahun lalu"], [], "harus menolak, perbandingan tahun ini vs tahun lalu jauh di luar rentang data yang cuma ~3 hari"),
 
     # --- Edge cases: refusal per-pelanggan (HARUS tidak pakai tool) (3) ---
     ("EDU01", "edge_pelanggan", ["pelanggan mana yang paling sering beli sabun mandi"], [], "harus menolak, tidak ada user_id"),
