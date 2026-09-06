@@ -1,0 +1,42 @@
+Menjalankan 33 kasus (1x tiap kasus, evidence-only)...
+[1/33] RD01 (date_range): ['produk terlaris kategori Minuman dari tanggal 2026-08-01 sampai 2026-08-03']
+App "alfagift_sales_agent" can transfer between agents but has no context_cache_config. Every transfer swaps the system instruction and the tool set, so the request prefix changes and the whole prompt is re-sent uncached after each transfer. Set context_cache_config on the app to give each agent its own cache.
+D:\agentic\agentic_dev\rag-env\Lib\site-packages\google\adk\models\llm_request.py:298: UserWarning: [EXPERIMENTAL] feature FeatureName.JSON_SCHEMA_FOR_FUNC_DECL is enabled.
+  declaration = tool._get_declaration()
+[2/33] RD02 (date_range): ['top 5 produk terlaris dari 1 Agustus sampai 3 Agustus 2026']
+[3/33] RD03 (date_range): ['kategori apa yang paling laris dari tanggal 2026-08-01 hingga 2026-08-02']
+[4/33] RD04 (date_range): ['produk terlaris kategori Sabun Mandi antara tanggal 1 dan 2 Agustus 2026']
+[5/33] RD05 (date_range): ['penjualan kategori Makanan dari tanggal 2026-08-02 sampai 2026-08-03 gimana']
+[6/33] RD06 (date_range): ['5 kategori terlaris dalam rentang 2026-08-01 - 2026-08-03']
+[7/33] RD07 (date_range): ['produk terlaris minuman rentang tanggal 2 sampai 3 Agustus 2026']
+[8/33] RD08 (date_range): ['top 3 produk terlaris kategori Kebutuhan Rumah periode 2026-08-01 sampai 2026-08-02']
+[9/33] RD09 (date_range): ['kategori dengan penjualan terendah dari tanggal 1 Agustus sampai 3 Agustus 2026']
+[10/33] RD10 (date_range): ['produk apa yang paling laris sepanjang tanggal 2026-08-01 sampai 2026-08-03']
+[11/33] RD11 (date_range): ['top 10 produk terlaris kategori Personal Care untuk rentang 2026-08-01 hingga 2026-08-03']
+[12/33] RD14 (date_range): ['5 produk terlaris kategori Kebutuhan Dapur dari tanggal 2026-08-01 sampai 2026-08-03']
+[13/33] RD15 (date_range): ['kategori terlaris untuk periode 1-3 Agustus 2026']
+[14/33] RD16 (date_range): ['kategori paling sedikit terjual dari tanggal 2026-08-01 sampai 2026-08-03']
+[15/33] PD03 (per_day): ['top 3 produk terlaris per hari dari tanggal 2026-08-01 sampai 2026-08-03']
+[16/33] PD04 (per_day): ['produk terlaris kategori Minuman per hari untuk tanggal 1 sampai 3 Agustus 2026']
+[17/33] PD05 (per_day): ['tiap hari produk apa yang paling laris dari tanggal 2026-08-01 sampai 2026-08-02']
+[18/33] PD06 (per_day): ['setiap hari, produk terlaris kategori Sabun Mandi apa saja dari 2026-08-01 sampai 2026-08-03']
+[19/33] PD07 (per_day): ['breakdown produk terlaris harian dari tanggal 2026-08-01 sampai 2026-08-03']
+[20/33] PD10 (per_day): ['5 produk terlaris per hari kategori Kebutuhan Rumah dari 2026-08-01 sampai 2026-08-03']
+[21/33] PD11 (per_day): ['produk apa yang terlaris di masing-masing hari antara 2026-08-01 dan 2026-08-03']
+[22/33] PD15 (per_day): ['bandingkan produk terlaris tiap hari dari tanggal 2026-08-01 sampai 2026-08-03']
+[23/33] DTB02 (date_edge): ['top 2 produk terlaris per hari dari tanggal 2026-07-30 sampai 2026-08-01']
+[24/33] DTB03 (date_edge): ['kategori terlaris dari tanggal 2026-08-03 sampai 2026-08-01']
+[25/33] DTB04 (date_edge): ['produk terlaris tanggal 2026-08-01 sampai 2026-08-01']
+    >>> CANARY FIRED: NOTE 2026-09-07T02:45:51 | _log_after_tool | KEMUNGKINAN ARG-EXTRACTION MISS -- pertanyaan tampak menyebut rentang tanggal (kata sambung + token tanggal) tapi args tool=get_top_sellers tidak berupa rentang nyata (start_date='2026-08-01' end_date='2026-08-01') -- BELUM ada koreksi otomatis untuk kasus ini, murni observabilitas. question='produk terlaris tanggal 2026-08-01 sampai 2026-08-01' args={'start_date': '2026-08-01', 'end_date': '2026-08-01', 'top_n': 10}
+[26/33] DTB05 (date_edge): ['top 2 produk terlaris per hari tanggal 2026-08-01 sampai 2026-08-01']
+    >>> CANARY FIRED: NOTE 2026-09-07T02:46:49 | _log_after_tool | KEMUNGKINAN ARG-EXTRACTION MISS -- pertanyaan tampak menyebut rentang tanggal (kata sambung + token tanggal) tapi args tool=get_top_sellers tidak berupa rentang nyata (start_date='2026-08-01' end_date='2026-08-01') -- BELUM ada koreksi otomatis untuk kasus ini, murni observabilitas. question='top 2 produk terlaris per hari tanggal 2026-08-01 sampai 2026-08-01' args={'segment': '', 'top_n': 2, 'start_date': '2026-08-01', 'end_date': '2026-08-01'}
+[27/33] DTB07 (date_edge): ['produk terlaris kategori Minuman sampai tanggal 2026-08-02']
+    >>> CANARY FIRED: NOTE 2026-09-07T02:47:50 | _log_after_tool | KEMUNGKINAN ARG-EXTRACTION MISS -- pertanyaan tampak menyebut rentang tanggal (kata sambung + token tanggal) tapi args tool=get_top_sellers tidak berupa rentang nyata (start_date='' end_date='2026-08-02') -- BELUM ada koreksi otomatis untuk kasus ini, murni observabilitas. question='produk terlaris kategori Minuman sampai tanggal 2026-08-02' args={'segment': 'Minuman', 'end_date': '2026-08-02', 'top_n': 5}
+[28/33] DTB09 (date_edge): ['produk terlaris per hari dari tanggal 2020-01-01 sampai 2020-01-03']
+[29/33] DTB10 (date_edge): ['top 2 produk terlaris per hari dengan format tanggal 01-08-2026 sampai 03-08-2026']
+[30/33] CPD01 (compound_date): ['produk terlaris kategori Sabun Mandi tanggal 2026-08-01, dan berapa rentang harganya']
+    >>> CANARY FIRED: NOTE 2026-09-07T02:50:55 | _log_after_tool | KEMUNGKINAN ARG-EXTRACTION MISS -- pertanyaan tampak menyebut rentang tanggal (kata sambung + token tanggal) tapi args tool=get_top_sellers tidak berupa rentang nyata (start_date='2026-08-01' end_date='2026-08-01') -- BELUM ada koreksi otomatis untuk kasus ini, murni observabilitas. question='produk terlaris kategori Sabun Mandi tanggal 2026-08-01, dan berapa rentang harganya' args={'end_date': '2026-08-01', 'top_n': 1, 'segment': 'Sabun Mandi', 'start_date': '2026-08-01'}
+[31/33] CPD02 (compound_date): ['top 2 produk terlaris per hari dari tanggal 2026-08-01 sampai 2026-08-03 untuk kategori Minuman, sekalian kasih rentang harganya']
+[32/33] LD05 (language_drift): ['top 2 produk terlaris per hari kategori makanan dari tanggal 2026-08-01 sampai 2026-08-03']
+[33/33] MTD02 (multi_turn): ['top 2 produk terlaris per hari dari tanggal 2026-08-01 sampai 2026-08-03', 'yang paling laris di tanggal 2026-08-01, harganya berapa?']
+SELESAI

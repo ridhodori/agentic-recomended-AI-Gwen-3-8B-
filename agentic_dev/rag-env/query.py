@@ -1013,25 +1013,45 @@ def _log_before_tool(tool, args, tool_context) -> None:
     return None
 
 
-def _write_tool_log_line(tool, args, tool_context, tool_response) -> None:
+def _write_tool_log_line(tool, args, tool_context, tool_response, effective_tool: str = "") -> None:
     """Helper: Tulis baris log tool call ke tool_calls.log (durasi, status).
-    Dipakai oleh _log_after_tool dan _log_after_tool_root."""
+    Dipakai oleh _log_after_tool dan _log_after_tool_root.
+
+    `effective_tool` -- diisi HANYA saat _maybe_correct_per_day_miss mengganti
+    tool_response giliran ini (lihat pemanggil di _log_after_tool). Ditulis
+    sebagai field terpisah, bukan cuma baris NOTE freeform, supaya konsumen
+    OTOMATIS (test_agent_cases.py::_new_tool_calls, atau tooling lain di masa
+    depan) bisa tahu tool APA yang datanya benar-benar sampai ke pengguna
+    tanpa perlu korelasi manual ke NOTE line terpisah -- root cause dari
+    ditemukannya field ini: tools_called selama ini SELALU melaporkan nama
+    tool asli (mis. get_top_sellers) walau kontennya sudah dikoreksi jadi
+    get_top_sellers_by_day, sehingga bentrok dengan expected_tools test-case
+    yang menulis nama tool YANG BENAR (mis. PD04) -- lihat rag-setup-windows.md
+    Known Issues. Kosong (default) berarti tidak ada koreksi -- baris log
+    tetap identik dengan format lama, tidak memutus parser lama."""
     started = _tool_call_started_at.pop(id(tool_context), None)
     duration = time.monotonic() - started if started is not None else -1.0
     ok = not (isinstance(tool_response, dict) and tool_response.get("error"))
     line = (
         f"{datetime.now().isoformat(timespec='seconds')} | {tool.name} | "
-        f"args={args} | {duration:.2f}s | {'OK' if ok else 'ERROR'}\n"
+        f"args={args} | {duration:.2f}s | {'OK' if ok else 'ERROR'}"
     )
+    if effective_tool and effective_tool != tool.name:
+        line += f" | effective_tool={effective_tool}"
+    line += "\n"
     with open(TOOL_LOG_PATH, "a", encoding="utf-8") as f:
         f.write(line)
 
 
 def _log_after_tool(tool, args, tool_context, tool_response):
     corrected = _maybe_correct_per_day_miss(tool, args, _current_turn_question)
+    effective_tool = ""
     if corrected is not None:
         tool_response = corrected
-    _write_tool_log_line(tool, args, tool_context, tool_response)
+        effective_tool = "get_top_sellers_by_day"
+    else:
+        _log_possible_arg_extraction_miss(tool, args, _current_turn_question)
+    _write_tool_log_line(tool, args, tool_context, tool_response, effective_tool=effective_tool)
     _current_turn_tool_outputs.append(str(tool_response))
     return corrected
 
@@ -1147,6 +1167,76 @@ def _log_possible_per_day_miss(question: str, tool_outputs: str) -> None:
                 f"cek args tool yang sebenarnya terpanggil di baris tool_calls.log sebelumnya. "
                 f"question={question!r}\n"
             )
+
+
+# Kata sambung rentang tanggal + token tanggal apa pun -- dipakai HANYA oleh
+# _log_possible_arg_extraction_miss di bawah, sebagai kanari observabilitas.
+# Bukan ISO-only: pertanyaan pengguna ASLI selalu pakai nama bulan Indonesia
+# (mis. "1 Agustus 2026", "periode 1-3 Agustus 2026") -- ISO cuma muncul di
+# ARGUMEN tool setelah diekstrak model, tidak pernah di teks pertanyaan itu
+# sendiri (dikonfirmasi lewat isi CASES di test_agent_cases.py, grup
+# date_range/RD*) -- regex ISO-only akan selalu nol-match dan kanari ini
+# tidak akan pernah menyala walau ekstraksi benar-benar gagal.
+_DATE_TOKEN_RE = re.compile(
+    r"\btanggal\s*\d{1,2}\b|\btgl\.?\s*\d{1,2}\b|"
+    r"\b\d{1,2}\s*(januari|februari|maret|april|mei|juni|juli|agustus|"
+    r"september|oktober|november|desember)\b|"
+    r"\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}\s*-\s*\d{1,2}\b",
+    re.IGNORECASE,
+)
+_RANGE_CONNECTOR_RE = re.compile(
+    r"\bsampai\b|\bsampe\b|\bhingga\b|\bantara\b|\bperiode\b|\brentang\b|\bs\.?/?d\b",
+    re.IGNORECASE,
+)
+_DATE_ARG_TOOLS = {"get_top_sellers", "get_top_sellers_by_day", "get_top_categories"}
+
+
+def _log_possible_arg_extraction_miss(tool, args: dict, question: str) -> None:
+    """Kanari KETIGA, LOG-ONLY -- ditambahkan 2026-09-07 sebagai hasil audit
+    shortcoming (BUKAN respons ke bug yang sudah teramati), lalu DIPERSEMPIT
+    di hari yang sama setelah evidence run 33 kasus langsung (RD*/PD*/DTB*/
+    CPD*/LD05/MTD02 -- semua kasus yang menyebut rentang tanggal di
+    test_agent_cases.py) lewat model sungguhan.
+
+    Kondisi awal (fire kalau start_date ATAU end_date kosong, ATAU
+    keduanya sama) menyala 4x tapi SEMUA 4 adalah false positive terhadap
+    desain yang MEMANG disengaja dan sudah didokumentasikan di
+    test_agent_cases.py: DTB04/DTB05 (rentang satu-hari ditulis "tanggal X
+    sampai X", start==end memang valid, lihat catatan kasusnya), DTB07
+    (cuma end_date diisi -- sengaja default ke tanggal minimum tersedia,
+    lihat catatan kasusnya), CPD01 ("rentang" di pertanyaan merujuk rentang
+    HARGA lewat get_price_range, bukan rentang tanggal). Nol dari 33 kasus
+    menunjukkan kegagalan ekstraksi nyata. Kondisi dipersempit jadi HANYA
+    sinyal paling jelas: pertanyaan menyebut rentang tanggal tapi TIDAK
+    SATU PUN dari start_date/end_date terisi -- kegagalan ekstraksi total,
+    beda dari rentang satu-hari/terbuka yang semuanya desain valid di sini.
+
+    Beda arah dari _maybe_correct_per_day_miss (yang mengoreksi TOOL SALAH
+    terpanggil padahal argumennya sendiri sudah rentang yang benar): fungsi
+    ini menangkap tool yang BENAR terpanggil tapi argumennya sendiri gagal
+    total menangkap tanggal apa pun. SENGAJA tidak mengoreksi apa pun --
+    kalau kanari yang sudah dipersempit ini pun tidak pernah menyala lagi
+    di run berikutnya, celah ini dianggap teoretis (sama seperti EDW03),
+    dibiarkan sbg observabilitas permanen. Lihat rag-setup-windows.md Known
+    Issues utk hasil investigasi lengkap."""
+    if tool.name not in _DATE_ARG_TOOLS:
+        return
+    if not (_DATE_TOKEN_RE.search(question) and _RANGE_CONNECTOR_RE.search(question)):
+        return  # pertanyaan tidak tampak menyebut rentang tanggal sama sekali
+    start_date = (args or {}).get("start_date") or ""
+    end_date = (args or {}).get("end_date") or ""
+    if start_date or end_date:
+        return  # minimal satu batas tertangkap -- rentang satu-hari, rentang terbuka
+        # (cuma satu sisi), atau rentang penuh semuanya desain valid di sini (lihat
+        # DTB04/DTB05/DTB07 di test_agent_cases.py) -- bukan sinyal ekstraksi gagal
+    with open(TOOL_LOG_PATH, "a", encoding="utf-8") as f:
+        f.write(
+            f"NOTE {datetime.now().isoformat(timespec='seconds')} | _log_after_tool | "
+            f"KEMUNGKINAN ARG-EXTRACTION MISS TOTAL -- pertanyaan tampak menyebut rentang "
+            f"tanggal (kata sambung + token tanggal) tapi args tool={tool.name} SAMA SEKALI "
+            f"tidak berisi start_date maupun end_date -- BELUM ada koreksi otomatis untuk "
+            f"kasus ini, murni observabilitas. question={question!r} args={args}\n"
+        )
 
 
 # Ambang jumlah angka konkret "asing" (bukan dari pertanyaan pengguna) yang

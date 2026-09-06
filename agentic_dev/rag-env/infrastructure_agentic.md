@@ -1368,3 +1368,58 @@ re-run 200-kasus pasca poin 5 belum dijalankan (~4 jam wall-clock,
 proporsi biaya-manfaat dinilai tidak sepadan setelah eksperimen bertarget
 20-trial sudah memberi sinyal kuat). Kalau butuh angka regresi penuh yang
 benar-benar mutakhir, jalankan ulang `test_agent_cases.py`.
+
+## 8. Update Review 2026-09-07 -- Audit Shortcoming Pasca-Fix, Dua Perbaikan
+
+Dipicu permintaan eksplisit meninjau bagian 7 utk kemungkinan celah yang
+masih tersisa dari mekanisme koreksi `_maybe_correct_per_day_miss` itu
+sendiri (bukan laporan bug baru dari pengguna) -- dua celah dikonfirmasi
+nyata lewat pembacaan kode langsung, keduanya diperbaiki hari yang sama:
+
+1. **`tools_called` tidak pernah mencerminkan koreksi.** `_new_tool_calls`
+   (`test_agent_cases.py`) mem-parsing nama tool ASLI dari `tool_calls.log`
+   (`parts[1]`), yang SELALU `get_top_sellers` walau
+   `_maybe_correct_per_day_miss` sudah mengganti isinya jadi hasil
+   `get_top_sellers_by_day` -- bentrok dengan `expected_tools` kasus
+   seperti `PD04` (`["get_top_sellers_by_day"]`). Ini BUKAN cuma masalah
+   kosmetik: `score_autocorrect.py` (dipakai utk angka 19/20 di bagian 7)
+   sudah harus menghindari `tools_called` sama sekali karena hal ini,
+   memakai pencocokan angka jawaban sbg gantinya -- bukti nyata jebakan ini
+   sudah pernah kena sekali. Diperbaiki: `_write_tool_log_line` menulis
+   field baru `effective_tool=X` HANYA saat ada koreksi (baris log normal
+   tidak berubah sama sekali, backward-compatible), `_new_tool_calls`
+   membaca field ini utk `tools_called` sambil tetap expose nama asli
+   lewat `raw_tools_called` terpisah. Diverifikasi:
+   `_verify_effective_tool_log_field.py` (4 kasus, termasuk baris log
+   FORMAT LAMA pra-fix tetap terparse identik).
+2. **Koreksi cuma menjaga TOOL yang benar, bukan ARGUMEN yang benar.**
+   `_maybe_correct_per_day_miss` mensyaratkan `start_date != end_date`
+   (keduanya terisi) sbg bukti "ini rentang nyata" -- kalau model sendiri
+   gagal mengekstrak rentang itu dari pertanyaan (mis. cuma menangkap satu
+   dari dua tanggal), prasyaratnya gagal dan TIDAK ADA jaring pengaman sama
+   sekali, celah yang orthogonal dari poin 5 bagian 7. Ditambahkan
+   `_log_possible_arg_extraction_miss()` sbg kanari LOG-ONLY (bukan koreksi
+   aktif -- parsing tanggal bahasa Indonesia bebas terlalu rawan salah
+   utk jadi jaring koreksi tanpa bukti kejadian dulu, ikuti persis
+   preseden metodologi poin 4-5 bagian 7: kanari dulu, koreksi aktif cuma
+   kalau ada bukti). **Evidence run langsung thd model sungguhan, SELURUH
+   33 kasus yang menyebut rentang tanggal** (`arg_extraction_evidence_
+   baseline.log`): kondisi awal menyala 4x, tapi audit silang ke catatan
+   kasus di `test_agent_cases.py` mengonfirmasi KEEMPATNYA false positive
+   thd desain yang MEMANG disengaja (`DTB04`/`DTB05`: rentang satu-hari
+   "X sampai X" valid; `DTB07`: cuma end_date diisi = sengaja default ke
+   tanggal minimum; `CPD01`: "rentang" itu rentang HARGA lewat
+   `get_price_range`, bukan tanggal). **Nol dari 33 kasus menunjukkan
+   kegagalan ekstraksi nyata.** Kondisi dipersempit jadi hanya sinyal
+   paling jelas (start_date DAN end_date SAMA SEKALI kosong), run ulang 33
+   kasus identik (`arg_extraction_evidence_after_narrowing.log`) -> nol
+   kali menyala. Kanari dibiarkan berjalan permanen sbg observabilitas
+   (pola sama seperti `EDW03`) -- **tidak ada koreksi aktif dipasang**
+   karena tidak ada bukti kejadian nyata yg butuh dikoreksi; membangun
+   parser tanggal bebas tanpa bukti berisiko menyuntikkan tanggal SALAH
+   sbg "koreksi", lebih buruk drpd celah diam yg ada sekarang.
+
+Kedua perbaikan murni observability/defense-in-depth -- tidak ada
+perubahan pada jawaban yang dikirim ke pengguna utk kasus mana pun,
+dikonfirmasi lewat seluruh 13 skrip `_verify_*.py` di direktori ini tetap
+lulus (termasuk 2 skrip verifikasi baru di atas) setelah kedua perubahan.

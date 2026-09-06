@@ -311,20 +311,35 @@ _SPECIALIST_NAMES = {"kategori_specialist", "produk_specialist"}
 
 
 def _new_tool_calls(path, start_line_count):
-    """Mengembalikan (data_tools, specialists) -- dipisah supaya
-    expected_tools di CASES (nama tool data asli, mis. 'get_top_sellers')
-    tetap bisa dibandingkan tanpa perlu ditulis ulang pasca-migrasi Graph
-    (root+2 specialist), lihat 2026-09-05-graph-migration-design.md
-    bagian 6. Baris level-root (nama specialist) dan level-specialist
-    (nama tool data) sama-sama ditulis ke tool_calls.log oleh callback
-    yang berbeda (lihat spec bagian 9), dibedakan di sini lewat nama."""
+    """Mengembalikan (data_tools, specialists, raw_data_tools) -- dipisah
+    supaya expected_tools di CASES (nama tool data asli, mis.
+    'get_top_sellers') tetap bisa dibandingkan tanpa perlu ditulis ulang
+    pasca-migrasi Graph (root+2 specialist), lihat
+    2026-09-05-graph-migration-design.md bagian 6. Baris level-root (nama
+    specialist) dan level-specialist (nama tool data) sama-sama ditulis ke
+    tool_calls.log oleh callback yang berbeda (lihat spec bagian 9),
+    dibedakan di sini lewat nama.
+
+    `data_tools` melaporkan tool yang DATANYA benar-benar sampai ke
+    pengguna -- kalau baris punya field `effective_tool=X` (ditulis
+    _write_tool_log_line saat _maybe_correct_per_day_miss mengoreksi
+    giliran ini, lihat query.py), X dipakai, BUKAN nama tool yang
+    tercatat terpanggil. Root cause field ini ditambahkan: sebelumnya
+    actual_tools SELALU melaporkan nama tool asli (get_top_sellers) walau
+    kontennya sudah dikoreksi jadi get_top_sellers_by_day, sehingga
+    bentrok dengan expected_tools kasus seperti PD04 yang menulis nama
+    tool YANG BENAR -- lihat rag-setup-windows.md Known Issues.
+    `raw_data_tools` tetap melaporkan nama tool ASLI yang terpanggil
+    (tanpa koreksi) untuk keperluan audit/debug, tidak dipakai utk
+    pencocokan expected_tools."""
     try:
         with open(path, encoding="utf-8") as f:
             lines = f.readlines()
     except FileNotFoundError:
-        return [], []
+        return [], [], []
     new_lines = lines[start_line_count:]
     data_tools = []
+    raw_data_tools = []
     specialists = []
     for line in new_lines:
         if line.startswith("NOTE "):
@@ -334,9 +349,16 @@ def _new_tool_calls(path, start_line_count):
             name = parts[1].strip()
             if name in _SPECIALIST_NAMES:
                 specialists.append(name)
-            else:
-                data_tools.append(name)
-    return data_tools, specialists
+                continue
+            effective_name = name
+            for part in parts[2:]:
+                part = part.strip()
+                if part.startswith("effective_tool="):
+                    effective_name = part[len("effective_tool="):]
+                    break
+            raw_data_tools.append(name)
+            data_tools.append(effective_name)
+    return data_tools, specialists, raw_data_tools
 
 
 async def run_case(session_id, questions):
@@ -356,12 +378,13 @@ async def run_case(session_id, questions):
             error = f"{type(e).__name__}: {e}"
             traceback.print_exc()
         duration = time.monotonic() - started
-        tools_called, specialists_called = _new_tool_calls(TOOL_LOG_PATH, before)
+        tools_called, specialists_called, raw_tools_called = _new_tool_calls(TOOL_LOG_PATH, before)
         turns.append(
             {
                 "question": q,
                 "answer": final_text,
                 "tools_called": tools_called,
+                "raw_tools_called": raw_tools_called,
                 "specialists_called": specialists_called,
                 "duration_sec": round(duration, 1),
                 "error": error,
