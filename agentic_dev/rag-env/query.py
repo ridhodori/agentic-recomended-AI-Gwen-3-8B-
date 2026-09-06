@@ -99,6 +99,16 @@ os.environ.setdefault("OLLAMA_API_BASE", "http://localhost:11434")
 
 MODEL_LLM = "ollama_chat/qwen3-agent:latest"
 MODEL_EMBED = "nomic-embed-text"
+# Sengaja TIDAK meng-override temperature/top_p/top_k Modelfile (0.6/0.95/20,
+# default resmi Qwen3 thinking-mode) di LiteLlm -- dicoba turun ke 0.2 lewat
+# eksperimen 20-trial berpasangan (2026-09-06, lihat rag-setup-windows.md
+# Known Issues + temp_experiment_baseline.jsonl/temp_experiment_after.jsonl)
+# untuk kasus tool-routing get_top_sellers vs get_top_sellers_by_day yang
+# flaky, TAPI hasilnya turun (11/20 -> 8/20 kasus benar), bukan naik --
+# temperature lebih rendah cuma mengunci model ke jawaban PALING MUNGKIN-nya
+# lebih konsisten, dan utk sebagian prompt jawaban paling mungkin itu memang
+# salah (PD10 turun dari 3/5 ke 0/5), jadi mengurangi variance di sini
+# mengurangi akurasi, bukan menambah. Dikembalikan ke default Modelfile.
 KATALOG_CSV = "D:/agentic/chroma_db/katalog_produk.csv"
 TRANSACTION_CSV_GLOB = "D:/agentic/transaction_data/transaction_day*.csv"
 SESSION_DB_PATH = "D:/agentic/chroma_db/agent_sessions.db"
