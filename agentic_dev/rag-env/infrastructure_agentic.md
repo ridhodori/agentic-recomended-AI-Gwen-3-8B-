@@ -14,10 +14,23 @@ sumber yang ter-install di `Lib/site-packages/google/adk/` pada venv ini
 
 ## ⚠️ Peringatan: proses yang sedang berjalan saat ini memakai kode LAMA
 
-**Ditemukan saat review sesi ini (2026-09-06), lewat pengecekan langsung ke
-proses yang benar-benar hidup di mesin ini, bukan asumsi dari kode saja:**
-ada proses `python query.py` yang berjalan (PID 26944, dimulai 06/09/2026
-10:11) dari working tree **`D:/agentic/.worktrees/graph-migration/agentic_dev/rag-env/`**
+**STATUS TERBARU (2026-09-06, sore -- ditemukan lagi lewat pengecekan
+langsung proses hidup, BUKAN cuma asumsi dari peringatan lama di bawah):**
+proses ini MASIH berjalan sekarang, dengan PID BARU (24596, dimulai
+06/09/2026 12:13, jadi proses ini di-restart entah oleh siapa SETELAH
+peringatan asli di bawah ini ditulis pagi harinya dengan PID 26944) --
+tindak lanjut yang disarankan sejak pagi ("hentikan proses lama itu")
+**belum pernah dieksekusi**. Dalam rentang waktu proses baru ini berjalan,
+SATU fix-wave besar lagi masuk ke `main` (`40f40b2`..`d132c52`, lihat
+bagian 7) -- `get_top_sellers_by_day`, perbaikan segmen kosong, perbaikan
+routing per-hari, dan koreksi deterministik -- yang proses worktree ini
+JUGA tidak punya, DITAMBAH dari sebelumnya. Kalau proses inilah yang
+sungguhan dipakai untuk bertanya, seluruh pekerjaan hari ini (bagian 6 DAN
+bagian 7) tidak akan terasa efeknya sama sekali.
+
+**Peringatan asli (ditulis pagi hari, 2026-09-06, PID 26944):** ada proses
+`python query.py` yang berjalan dari working tree
+**`D:/agentic/.worktrees/graph-migration/agentic_dev/rag-env/`**
 -- git worktree TERPISAH dari checkout `main` di
 `D:/agentic/agentic_dev/rag-env/` (tempat file ini berada). `query.py` di
 worktree itu adalah snapshot LAMA (branch `graph-migration` @ `a7ea19e`,
@@ -26,11 +39,12 @@ transaksi v2 (`ca6ae2f` dst.). Konsekuensinya:
 
 - `TRANSACTION_CSV = "D:/agentic/transaction_data/transaction_data.csv"` di
   kode lama itu **menunjuk ke file yang sudah tidak ada** -- direktori
-  `transaction_data/` sekarang cuma berisi `transaction_day1.csv` dan
-  `transaction_day2.csv` (hasil migrasi v2). `_load_transactions()` di
-  proses itu akan **gagal (`FileNotFoundError`)** begitu tool apa pun yang
-  butuh data transaksi dipanggil -- praktis semua tool KECUALI `search_catalog`
-  murni (yang cuma pakai ChromaDB + `katalog_df`).
+  `transaction_data/` sekarang berisi `transaction_day1.csv`,
+  `transaction_day2.csv`, DAN `transaction_day3.csv` (hasil migrasi v2).
+  `_load_transactions()` di proses itu akan **gagal (`FileNotFoundError`)**
+  begitu tool apa pun yang butuh data transaksi dipanggil -- praktis semua
+  tool KECUALI `search_catalog` murni (yang cuma pakai ChromaDB +
+  `katalog_df`).
 - Proses itu juga TIDAK punya `get_peak_hours`, `get_trending_products`,
   `get_trending_categories`, filter tanggal, ranking net-qty, atau perbaikan
   final-review terbaru (`129e1cb`, `80057a8`) -- semua itu cuma ada di
@@ -40,15 +54,16 @@ transaksi v2 (`ca6ae2f` dst.). Konsekuensinya:
   dikerjakan di satu working tree, tapi proses yang sungguhan dipakai jalan
   dari working tree lain.
 
-**Tindak lanjut yang disarankan (belum dieksekusi -- keputusan pemilik
-proyek):** hentikan proses lama itu, lalu jalankan `python query.py` dari
-`D:/agentic/agentic_dev/rag-env/` (checkout `main`, yang sudah punya semua
-perbaikan sampai `ee79213`). Kalau worktree `graph-migration` sudah tidak
-dipakai lagi untuk pengembangan aktif (semua isinya sudah ter-merge ke
-`main`), pertimbangkan juga `git worktree remove` untuk itu supaya tidak
-ada working tree basi yang bisa ketriggerjalankan lagi tanpa sadar --
-tapi ini keputusan destructive, jangan dieksekusi otomatis tanpa
-konfirmasi eksplisit.
+**Tindak lanjut yang disarankan (MASIH belum dieksekusi -- keputusan
+pemilik proyek, ditanyakan ulang secara eksplisit di sesi 2026-09-06 sore):**
+hentikan proses lama itu (PID 24596 per pengecekan terakhir), lalu jalankan
+`python query.py` dari `D:/agentic/agentic_dev/rag-env/` (checkout `main`,
+yang sudah punya semua perbaikan sampai `d132c52`). Kalau worktree
+`graph-migration` sudah tidak dipakai lagi untuk pengembangan aktif (semua
+isinya sudah ter-merge ke `main`), pertimbangkan juga `git worktree remove`
+untuk itu supaya tidak ada working tree basi yang bisa ke-restart lagi
+tanpa sadar -- tapi ini keputusan destructive, jangan dieksekusi otomatis
+tanpa konfirmasi eksplisit.
 
 ---
 
@@ -1273,3 +1288,82 @@ peringatan di awal dokumen ini -- proses `python query.py` yang sedang
 berjalan di mesin ini per saat review ditulis TIDAK menjalankan kode yang
 dijelaskan bagian 6 ini (atau bahkan sebagian besar bagian 1-5), karena
 jalan dari git worktree lain yang ketinggalan sebelum migrasi data v2.
+
+---
+
+## 7. Update Review 2026-09-06 (sore) -- Laporan Bug Pengguna, get_top_sellers_by_day, Eksperimen Temperature, Koreksi Deterministik
+
+Ditulis untuk menutup kesenjangan yang sama seperti yang memicu bagian 6:
+lima commit (`40f40b2`..`d132c52`) masuk ke `main` sepanjang sesi ini,
+dipicu laporan bug pengguna langsung ("top 2 produk terlaris" dan "top 2
+produk terlaris per hari tanggal X dan Y" tidak terjawab akurat), tapi
+belum tercermin di bagian mana pun sebelum revisi ini.
+
+1. **`40f40b2` -- akar masalah laporan bug: dua gap di `get_top_sellers`.**
+   Direproduksi langsung terhadap 3 juta baris data nyata (bukan tebakan):
+   (a) `segment` WAJIB diisi -- persis bug yang sama seperti `get_price_range`
+   di bagian Known Issues (`rag-setup-windows.md`), luput karena SELURUH
+   kasus `TS01`-`TS14` di `test_agent_cases.py` sengaja menyebut
+   segmen/kategori. (b) `start_date`/`end_date` cuma mendukung SATU rentang
+   yang di-agregasi jadi satu ranking gabungan -- terbukti MENYESATKAN
+   untuk pertanyaan "per hari" (pemenang gabungan 3-hari beda dari pemenang
+   tiap hari individual, diverifikasi dengan data nyata). Diperbaiki:
+   segmen kosong = seluruh data (konsisten dgn `get_worst_sellers`/
+   `get_peak_hours`), tool baru `get_top_sellers_by_day` untuk breakdown
+   per tanggal.
+2. **`bec1db4` -- suite `test_agent_cases.py` 106 -> 200 kasus.** Grup
+   tanggal diperluas jadi 5 kategori terpisah (`date_filter`/`date_range`/
+   `per_day`/`date_edge`/`compound_date`, 86 kasus total) karena poin 1 di
+   atas TERBUKTI luput justru karena kurangnya cakupan uji utk kombinasi
+   segmen-kosong dan per-hari. `PD01` adalah prompt ASLI pengguna, disimpan
+   verbatim sebagai kasus regresi permanen, bukan cuma repro manual.
+3. **`c69ec21` -- regresi ganda dari fitur baru poin 1, ditemukan lewat
+   full run 200-kasus.** (a) Model bingung memilih `get_top_sellers` vs
+   `get_top_sellers_by_day` di KEDUA arah -- akar masalah: kalimat aturan
+   ambigu ("...or names more than one specific date") yang secara tidak
+   sengaja cocok untuk rentang tanggal APA PUN. Diperbaiki jadi murni
+   berbasis kata kunci eksplisit. Diukur pada 62 kasus: mismatch mentah
+   40% -> 21%, tapi investigasi manual jawaban (bukan cuma nama tool)
+   menunjukkan mayoritas 21% itu penolakan jujur via jalur berbeda (bukan
+   bug) -- tingkat masalah NYATA cuma ~5%. (b) `kategori_specialist` salah
+   menolak perbandingan kategori bernama yang digabung filter tanggal,
+   mengira itu kemampuan yang tidak ada padahal `get_top_categories` sudah
+   mendukungnya (diverifikasi versi tanpa tanggal sudah jalan). Diperbaiki
+   di `KATEGORI_INSTRUCTION`, diverifikasi live: angka jawaban cocok persis
+   dgn `_get_top_categories_impl` langsung.
+4. **`5b59b28` -- eksperimen NEGATIF yang disengaja, didokumentasikan
+   supaya tidak dicoba ulang buta.** Hipotesis: turunkan `temperature`
+   Modelfile (0.6 -> 0.2) utk kurangi sisa flakiness poin 3(a). Diuji
+   dengan metodologi berpasangan yang benar (baseline 20-trial SEBELUM ubah
+   kode, ulang 20 trial IDENTIK sesudah). Hasil: 11/20 (55%) -> 8/20 (40%)
+   -- LEBIH BURUK. Pelajaran: temperature mengontrol variance di sekitar
+   jawaban PALING MUNGKIN model, bukan apakah jawaban itu benar -- untuk
+   parafrase yang jawaban paling mungkinnya sudah salah, temperature
+   rendah cuma mengunci model ke kesalahan itu lebih konsisten. Dibatalkan,
+   dikembalikan ke default Modelfile.
+5. **`d132c52` -- backstop deterministik, akhirnya berhasil menaikkan
+   akurasi (bukan cuma dicoba).** Karena poin 3(a) (instruksi) dan poin 4
+   (sampling) TERBUKTI tidak cukup, `_maybe_correct_per_day_miss()`
+   ditambahkan di `_log_after_tool`: kalau `get_top_sellers` terpanggil utk
+   rentang multi-hari nyata PADAHAL pertanyaan eksplisit minta per-hari,
+   `tool_response`-nya diganti otomatis dengan hasil
+   `_get_top_sellers_by_day_impl` (argumen sama) SEBELUM spesialis menulis
+   jawaban -- memanfaatkan kontrak `after_tool_callback` ADK yang
+   dikonfirmasi langsung dari source terinstall (`google/adk/flows/
+   llm_flows/functions.py`), bukan diasumsikan. Diuji ulang dgn 20 trial
+   IDENTIK seperti poin 4, diskor terhadap KONTEN jawaban (bukan cuma nama
+   tool -- nama tool di log tetap "get_top_sellers" walau sudah dikoreksi):
+   **11/20 (55%) -> 19/20 (95%)**, termasuk satu kasus yang tadinya 0/5
+   KONSISTEN jadi 5/5 bersih. Satu sisa kegagalan BUKAN bug koreksi (log
+   mengonfirmasi data yang dikirim ke spesialis sudah benar) -- spesialis
+   cuma merangkum sebagian data multi-hari yang benar itu di jawaban akhir,
+   masalah BEDA (kelengkapan ringkasan), didokumentasikan di
+   `rag-setup-windows.md` utk kerja lanjutan.
+
+**Status test suite setelah bagian ini:** `test_report.jsonl` (200 kasus,
+sebelum fix poin 3-5) dan `test_report_date_subset_rerun.jsonl` (62 kasus,
+setelah fix poin 3) TIDAK identik dengan kode `main` SAAT INI -- full
+re-run 200-kasus pasca poin 5 belum dijalankan (~4 jam wall-clock,
+proporsi biaya-manfaat dinilai tidak sepadan setelah eksperimen bertarget
+20-trial sudah memberi sinyal kuat). Kalau butuh angka regresi penuh yang
+benar-benar mutakhir, jalankan ulang `test_agent_cases.py`.

@@ -34,7 +34,7 @@ Catatan implementasi:
   - ADK memanggil tool sinkron langsung di event loop asyncio kalau tidak
     dibungkus async (lihat google.adk.tools.function_tool._invoke_callable) --
     tool ini semua melakukan panggilan HTTP (Ollama) dan scan pandas atas
-    transaction_data.csv (~3 juta baris gabungan), jadi kalau dipanggil langsung
+    transaction_data/transaction_day*.csv (~3 juta baris gabungan), jadi kalau dipanggil langsung
     event loop-nya beku selama itu. Tiap tool karena itu dibungkus jadi
     `async def` tipis yang menjalankan implementasi sinkronnya lewat
     `asyncio.to_thread`, supaya panggilan tool lain / housekeeping ADK &
@@ -71,6 +71,21 @@ Catatan implementasi:
     kalau riwayat sesi (SESSION_ID tetap sama selamanya) mulai mendekati
     batas num_ctx=8192 -- kanari murah, bukan solusi penuh (lihat
     infrastructure_agentic.md bagian Context).
+  - get_top_sellers_by_day (2026-09-06) menjawab pertanyaan "top N terlaris
+    PER HARI" dengan ranking terpisah per tanggal, beda dari get_top_sellers
+    yang mengagregasi rentang jadi SATU ranking gabungan -- lihat
+    PRODUK_INSTRUCTION utk aturan kapan pakai yang mana (murni berbasis kata
+    kunci eksplisit, bukan "rentang menyebut >1 tanggal", supaya tidak
+    ambigu dgn filter rentang biasa). _maybe_correct_per_day_miss() adalah
+    jaring pengaman DETERMINISTIK di _log_after_tool -- kalau model tetap
+    memanggil get_top_sellers utk permintaan yang eksplisit minta per-hari,
+    tool_response-nya diganti otomatis dgn hasil get_top_sellers_by_day
+    (argumen sama) SEBELUM spesialis sempat menulis jawaban dari data yang
+    salah, memanfaatkan kontrak after_tool_callback ADK (non-None return
+    menggantikan tool_response asli). Ditambahkan setelah instruksi &
+    sampling-parameter (temperature) TERBUKTI tidak cukup mengatasi sisa
+    miss-rate lewat pengujian langsung -- lihat rag-setup-windows.md Known
+    Issues utk data sebelum/sesudah lengkap.
 """
 
 import asyncio
