@@ -10,6 +10,195 @@ Semua klaim soal `google-adk` di bawah sudah diverifikasi langsung ke kode
 sumber yang ter-install di `Lib/site-packages/google/adk/` pada venv ini
 (2.8.0+ `[extensions]`), bukan diasumsikan dari dokumentasi umum.
 
+---
+
+## ⚠️ Peringatan: proses yang sedang berjalan saat ini memakai kode LAMA
+
+**Ditemukan saat review sesi ini (2026-09-06), lewat pengecekan langsung ke
+proses yang benar-benar hidup di mesin ini, bukan asumsi dari kode saja:**
+ada proses `python query.py` yang berjalan (PID 26944, dimulai 06/09/2026
+10:11) dari working tree **`D:/agentic/.worktrees/graph-migration/agentic_dev/rag-env/`**
+-- git worktree TERPISAH dari checkout `main` di
+`D:/agentic/agentic_dev/rag-env/` (tempat file ini berada). `query.py` di
+worktree itu adalah snapshot LAMA (branch `graph-migration` @ `a7ea19e`,
+sudah ter-merge ke `main` lewat `c6d4027`) -- dari SEBELUM migrasi data
+transaksi v2 (`ca6ae2f` dst.). Konsekuensinya:
+
+- `TRANSACTION_CSV = "D:/agentic/transaction_data/transaction_data.csv"` di
+  kode lama itu **menunjuk ke file yang sudah tidak ada** -- direktori
+  `transaction_data/` sekarang cuma berisi `transaction_day1.csv` dan
+  `transaction_day2.csv` (hasil migrasi v2). `_load_transactions()` di
+  proses itu akan **gagal (`FileNotFoundError`)** begitu tool apa pun yang
+  butuh data transaksi dipanggil -- praktis semua tool KECUALI `search_catalog`
+  murni (yang cuma pakai ChromaDB + `katalog_df`).
+- Proses itu juga TIDAK punya `get_peak_hours`, `get_trending_products`,
+  `get_trending_categories`, filter tanggal, ranking net-qty, atau perbaikan
+  final-review terbaru (`129e1cb`, `80057a8`) -- semua itu cuma ada di
+  `main`, tidak pernah di-merge balik ke branch `graph-migration`.
+- Ini pola bug yang PERSIS sama seperti yang sudah pernah terjadi dan
+  didokumentasikan di bagian 5 poin 4 ("Follow-up sama hari") -- fix/upgrade
+  dikerjakan di satu working tree, tapi proses yang sungguhan dipakai jalan
+  dari working tree lain.
+
+**Tindak lanjut yang disarankan (belum dieksekusi -- keputusan pemilik
+proyek):** hentikan proses lama itu, lalu jalankan `python query.py` dari
+`D:/agentic/agentic_dev/rag-env/` (checkout `main`, yang sudah punya semua
+perbaikan sampai `ee79213`). Kalau worktree `graph-migration` sudah tidak
+dipakai lagi untuk pengembangan aktif (semua isinya sudah ter-merge ke
+`main`), pertimbangkan juga `git worktree remove` untuk itu supaya tidak
+ada working tree basi yang bisa ketriggerjalankan lagi tanpa sadar --
+tapi ini keputusan destructive, jangan dieksekusi otomatis tanpa
+konfirmasi eksplisit.
+
+---
+
+## 0. Diagram Arsitektur (Gambar)
+
+Pelengkap visual untuk kerangka 5-lapis (Prompt/Context/Harness/Loop/Graph)
+yang dijelaskan panjang lebar di bagian 1-5 di bawah -- baca ini dulu untuk
+peta cepat, lalu ke bagian yang relevan untuk detail keputusan, benchmark,
+dan riwayat bug-nya. Ketiga diagram di bawah digambar langsung dari struktur
+`query.py` yang sungguhan berjalan (root + 2 spesialis, tool per spesialis,
+fungsi verifikasi) -- bukan dari ingatan/asumsi. Diagram menunjukkan
+struktur YANG DIMAKSUD (happy path); tiga isu diketahui yang belum
+diperbaiki (regresi routing PR04, regresi latensi suite-wide, dropout
+sintesis cross-sell CP01) tetap ada tapi tidak digambar di sini -- lihat
+bagian 5 untuk itu.
+
+### 0.1 Komponen & lapisan
+
+```mermaid
+flowchart TB
+    subgraph USER["Pengguna"]
+        CLI["CLI interaktif<br/>main() -- while True: input()"]
+    end
+
+    subgraph HARNESS["Harness -- google-adk"]
+        RUNNER["Runner.run_async()"]
+        SESS["SqliteSessionService<br/>-> agent_sessions.db"]
+        CB["before/after_tool_callback<br/>-> tool_calls.log"]
+    end
+
+    subgraph GRAPH["Graph -- root + 2 spesialis"]
+        ROOT["root_agent 'sales_recommender'<br/>tools=[] (pure router)<br/>sub_agents=[kategori, produk]"]
+        KAT["kategori_specialist<br/>mode=single_turn"]
+        PROD["produk_specialist<br/>mode=single_turn"]
+    end
+
+    subgraph TOOLS["Tools per spesialis"]
+        KATTOOLS["get_top_categories<br/>get_category_assortment<br/>get_trending_categories"]
+        PRODTOOLS["get_top_sellers / get_worst_sellers<br/>search_catalog<br/>find_cross_sell_candidates<br/>get_price_range / get_peak_hours<br/>get_trending_products"]
+    end
+
+    subgraph CONTEXT["Context / Data"]
+        CHROMA["ChromaDB 'products'<br/>RAG semantic search"]
+        EMBED["Ollama nomic-embed-text"]
+        KATALOG["katalog_df (pandas)<br/>katalog_produk.csv"]
+        TRANS["_transactions_cache (pandas)<br/>transaction_day*.csv (glob)"]
+    end
+
+    subgraph MODEL["LLM"]
+        OLLAMA["Ollama qwen3-agent:latest<br/>via LiteLlm"]
+    end
+
+    subgraph LOOP["Loop -- verifikasi & pembersihan akhir"]
+        VERIFY["verify_and_revise()<br/>cek regex angka -> eskalasi kondisional"]
+        STRIP["_strip_trailing_meta_section()"]
+        CANARY["_warn_if_session_growing()"]
+    end
+
+    CLI --> RUNNER
+    RUNNER --> SESS
+    RUNNER --> ROOT
+    ROOT -->|instruksi dinamis: _build_root_instruction| OLLAMA
+    ROOT -->|dispatch| KAT
+    ROOT -->|dispatch| PROD
+    KAT --> OLLAMA
+    PROD --> OLLAMA
+    KAT --> KATTOOLS
+    PROD --> PRODTOOLS
+    KATTOOLS --> TRANS
+    KATTOOLS --> KATALOG
+    PRODTOOLS --> TRANS
+    PRODTOOLS --> KATALOG
+    PRODTOOLS --> CHROMA
+    CHROMA --> EMBED
+    CB -.mengamati.-> KATTOOLS
+    CB -.mengamati.-> PRODTOOLS
+    ROOT --> VERIFY
+    VERIFY --> OLLAMA
+    VERIFY --> STRIP
+    STRIP --> CANARY
+    CANARY --> CLI
+```
+
+### 0.2 Alur satu giliran (sequence) -- di sinilah Loop & Harness kelihatan jalan
+
+```mermaid
+sequenceDiagram
+    actor U as Pengguna
+    participant CLI as main() / ask()
+    participant R as Runner (harness)
+    participant Root as root_agent (router)
+    participant Spec as kategori/produk_specialist
+    participant Tool as Tool Python (pandas/ChromaDB)
+    participant LLM as Ollama qwen3-agent
+
+    U->>CLI: input teks
+    CLI->>R: run_async(new_message)
+    R->>Root: giliran baru + riwayat sesi penuh
+    Root->>LLM: prompt (ROOT_INSTRUCTION + riwayat)
+    LLM-->>Root: pilih spesialis + resolusi referensi ("itu"/"tadi")
+    Root->>Spec: dispatch (single_turn, tanpa riwayat)
+    loop ReAct tool-calling (ditangani ADK, bukan loop manual)
+        Spec->>LLM: prompt (instruksi spesialis + deklarasi tool)
+        LLM-->>Spec: tool_call(nama, args) ATAU jawaban akhir
+        alt tool dipanggil
+            Spec->>Tool: eksekusi (async def -> asyncio.to_thread)
+            Tool-->>Spec: hasil (dicatat ke tool_calls.log via callback)
+            Spec->>LLM: tool_response masuk balik ke context
+        end
+    end
+    Spec-->>Root: jawaban akhir spesialis
+    Root-->>R: jawaban akhir (gabungan kalau multi-spesialis)
+    R-->>CLI: final_text
+    CLI->>CLI: verify_and_revise() -- cek regex angka murah
+    alt angka draft subset dari data tool + pertanyaan + riwayat sesi
+        CLI->>CLI: lolos, TANPA panggilan model kedua
+    else mismatch, atau draft tanpa angka verifiable
+        CLI->>LLM: 1x panggilan ekstra (bandingkan draft vs data tool mentah)
+        LLM-->>CLI: versi final (dikonfirmasi atau direvisi)
+    end
+    CLI->>CLI: _strip_trailing_meta_section()
+    CLI-->>U: jawaban akhir (+ kanari ukuran sesi kalau ambang tercapai)
+```
+
+### 0.3 Loop verifikasi akurasi (hybrid) -- detail keputusan & benchmark di bagian 5 #Bagian 2
+
+```mermaid
+flowchart TD
+    START["Jawaban draft selesai"] --> CHECKTOOLS{"Ada tool dipanggil<br/>giliran ini?"}
+    CHECKTOOLS -- "Tidak" --> CHECKSUS{"Angka asing (bukan dari<br/>pertanyaan/riwayat) >= 3?"}
+    CHECKSUS -- "Ya, dan tidak grounded ke riwayat" --> REJECT["Tolak draft --<br/>kirim pesan jujur<br/>(jaring pengaman fabrikasi)"]
+    CHECKSUS -- "Tidak, atau cukup grounded<br/>ke riwayat sesi" --> PASSA["Lolos apa adanya --<br/>penolakan sah / jawaban kreatif<br/>berbasis riwayat nyata"]
+    CHECKTOOLS -- "Ya" --> CHECKMATCH{"Semua angka draft ada di<br/>data tool + pertanyaan + riwayat?"}
+    CHECKMATCH -- "Ya" --> PASSB["Lolos -- TANPA panggilan<br/>model kedua (~92% giliran)"]
+    CHECKMATCH -- "Tidak" --> ESCALATE["Eskalasi: 1x panggilan<br/>ollama.chat() ekstra --<br/>bandingkan draft vs data tool"]
+    ESCALATE --> REVISED["Jawaban revisi<br/>(dicatat ke tool_calls.log<br/>kalau masih mismatch)"]
+```
+
+### 0.4 Pemetaan ke 5 lapis
+
+| Lapisan | Muncul di diagram sebagai | Elemen kunci di `query.py` | Detail lengkap |
+|---|---|---|---|
+| **Prompt** | edge "instruksi dinamis" di 0.1 | `_build_root_instruction`, `_build_kategori_instruction`, `_build_produk_instruction` -- `InstructionProvider` (callable), bukan string statis | bagian 1 |
+| **Context** | subgraph `CONTEXT` di 0.1 | ChromaDB `products`, `katalog_df`, `_transactions_cache`, riwayat sesi (`SqliteSessionService`) | bagian 2 |
+| **Harness** | subgraph `HARNESS` di 0.1, partisipan `R`/Runner di 0.2 | `google-adk` `Agent`+`Runner`+`LiteLlm`, `SqliteSessionService`, `before/after_tool_callback` | bagian 3 |
+| **Loop** | subgraph `LOOP` di 0.1, blok ReAct + verify di 0.2, diagram penuh 0.3 | tool-calling loop otomatis ADK, `verify_and_revise()` hybrid, `_strip_trailing_meta_section()`, `_warn_if_session_growing()` | bagian 4 |
+| **Graph** | subgraph `GRAPH` di 0.1 | `root_agent` (router, `tools=[]`) -> `kategori_specialist` + `produk_specialist` (`sub_agents`+`mode="single_turn"`) | bagian 5 |
+
+---
+
 ## Ringkasan Status
 
 > **Update:** item 1-3 di "Ringkasan Prioritas" (aturan kutip-angka-persis,
@@ -48,9 +237,9 @@ sumber yang ter-install di `Lib/site-packages/google/adk/` pada venv ini
 |---|---|---|
 | **Prompt** | Ada | 3 konstanta instruksi terpisah di `query.py` -- `ROOT_INSTRUCTION` (router, statis), `KATEGORI_INSTRUCTION` (statis), dan `PRODUK_INSTRUCTION` lewat `_build_produk_instruction()` (InstructionProvider, menyisipkan info katalog dinamis: jumlah produk, jumlah ter-index, tanggal update) tiap giliran -- lihat bagian 1 dan bagian 5 untuk detail split root/spesialis |
 | **Context** | Sebagian | RAG (ChromaDB) + data terstruktur (pandas) + sesi persisten (`SqliteSessionService` -> `agent_sessions.db`) ada; memori semantik lintas-sesi belum -- **menunggu keputusan scoping** (lihat bagian Context: desain sesi tunggal-abadi saat ini tidak cocok langsung dengan API `BaseMemoryService` yang berbasis multi-sesi) |
-| **Harness** | Ada | `google-adk` (`Agent` + `Runner` + `LiteLlm` -> Ollama) + `before_tool_callback`/`after_tool_callback` -> `tool_calls.log` + `test_agent_cases.py` (104 kasus regresi otomatis) |
+| **Harness** | Ada | `google-adk` (`Agent` + `Runner` + `LiteLlm` -> Ollama) + `before_tool_callback`/`after_tool_callback` -> `tool_calls.log` + `test_agent_cases.py` (117 kasus/120 giliran regresi otomatis saat ini, lihat bagian 6) |
 | **Loop** | Ada | Tool-calling loop (ReAct-style) dari ADK + retry sekali untuk embedding Ollama + `verify_and_revise()` (loop verifikasi akurasi hybrid, dipilih lewat benchmark nyata) |
-| **Graph** | **Bagian 1 & 2 diimplementasikan, 3 isu diketahui belum diperbaiki + 1 isu dimitigasi (jaring pengaman, bukan fix tunggal)** | Root router (`tools=[]`) + `kategori_specialist` + `produk_specialist`, plus `verify_and_revise()` untuk Bagian 2 -- diverifikasi lewat smoke test live + regresi 104-kasus, lihat bagian 5 untuk detail, ketiga isu terbuka (PR04, latensi suite-wide, dropout sintesis cross-sell CP01), dan isu keempat (root melewati delegasi untuk framing "rekomendasi promo" -- prompt-only fix TERBUKTI tidak cukup, forcing via API TERBUKTI tidak didukung Ollama/LiteLLM, jaring pengaman deterministik dipasang di `verify_and_revise()`) |
+| **Graph** | **Bagian 1 & 2 diimplementasikan -- dari 4 isu diketahui, 3 sudah diperbaiki penuh/sebagian, 1 masih terbuka (lihat bagian 6)** | Root router (`tools=[]`) + `kategori_specialist` + `produk_specialist`, plus `verify_and_revise()` untuk Bagian 2 -- diverifikasi lewat smoke test live + regresi 104-kasus (lalu 117-kasus, bagian 6). PR04 **sudah diperbaiki**, dropout sintesis cross-sell CP01 **diperbaiki sebagian**, regresi latensi suite-wide **masih terbuka** (akar masalah: jumlah panggilan LLM penuh bertambah, bukan `context_cache_config` -- itu no-op untuk Ollama), dan isu keempat (root melewati delegasi untuk framing "rekomendasi promo" -- prompt-only fix TERBUKTI tidak cukup, forcing via API TERBUKTI tidak didukung Ollama/LiteLLM) **sudah diperbaiki** lewat jaring pengaman deterministik di `verify_and_revise()` |
 
 Baris ini dulu (sebelum migrasi) berbunyi "**Graph** benar-benar belum
 tersentuh sama sekali" -- sudah tidak berlaku lagi, lihat bagian 5.
@@ -232,7 +421,9 @@ menjalankannya.
   **Selesai** (lihat Ringkasan Prioritas #2): `before_tool_callback`/
   `after_tool_callback` mencatat tiap panggilan ke `tool_calls.log`.
 - ~~**Test/eval otomatis:** pengujian sejauh ini manual...~~ -- **Selesai**:
-  `test_agent_cases.py` (104 kasus/107 giliran) menjalankan `root_agent`
+  `test_agent_cases.py` (mulai dari 104 kasus/107 giliran, sekarang 117
+  kasus/120 giliran setelah kasus trending/peak-hours/date-filter/bahasa
+  ditambah -- lihat bagian 6) menjalankan `root_agent`
   produksi lewat `InMemorySessionService` terisolasi dan menulis hasil ke
   `test_report.jsonl`. Bukan `adk eval` bawaan (lihat Saran tool di bawah
   untuk kenapa) -- custom karena butuh menilai jawaban akhir secara
@@ -313,7 +504,7 @@ berhenti tercapai.
 
 ---
 
-## 5. Graph — **Bagian 1 & 2 diimplementasikan (3 isu diketahui belum diperbaiki)**
+## 5. Graph — **Bagian 1 & 2 diimplementasikan (status per isu: lihat bagian 6 untuk update terakhir)**
 
 **Definisi:** struktur eksplisit (node = agent/langkah, edge = alur
 kontrol/data) untuk mengoordinasikan lebih dari satu agent atau tahap
@@ -553,9 +744,13 @@ dan regresi penuh:
   (`compare_migration_report.py`, `test_report.jsonl` vs.
   `test_report_pre_migration.jsonl`): **0 error baru**.
 
-**Tiga temuan dari regresi 104-kasus, BELUM diperbaiki, dicatat di sini
-supaya tidak terkubur** (temuan keempat, ditemukan terpisah lewat pengujian
-interaktif pengguna dan SUDAH diperbaiki, ada di bawah nomor 4):
+~~**Tiga temuan dari regresi 104-kasus, BELUM diperbaiki, dicatat di sini
+supaya tidak terkubur**~~ **UPDATE (lihat bagian 6): dari tiga temuan ini, #1
+(PR04) sudah diperbaiki penuh dan #3 (dropout CP01) diperbaiki sebagian --
+cuma #2 (regresi latensi) yang masih benar-benar terbuka** -- status
+per-item ada di catatan "DIPERBAIKI"/masih terbuka di bawah tiap nomor
+(temuan keempat, ditemukan terpisah lewat pengujian interaktif pengguna dan
+SUDAH diperbaiki, ada di bawah nomor 4):
 
 1. **Regresi routing PR04 (terisolasi, 1/104, tapi nyata):** pertanyaan
    rentang harga yang memakai kata "kategori" ("berapa harga median
@@ -932,18 +1127,26 @@ cukup dipasang di `ask()` yang sudah ada.
    + pengelompokan spesialis (`root_agent` router + `kategori_specialist`
    + `produk_specialist`) sudah di `query.py`, diverifikasi lewat smoke
    test live (routing, chaining, resolusi referensi lintas-giliran) dan
-   regresi penuh 104-kasus (0 error baru) -- **tapi tiga isu diketahui
-   BELUM diperbaiki**: regresi routing PR04 (1/104, salah rute pertanyaan
-   harga berkata "kategori"), regresi latensi yang ternyata suite-wide
-   (total suite +318%, median per-kasus +218%, 100/104 kasus melambat --
-   bukan cuma kasus compound seperti draf awal temuan ini; akar masalah:
-   tidak ada `context_cache_config`), dan dropout sintesis cross-sell di
-   CP01 (1 dari 4 sampel independen menyebut nol kandidat cross-sell
-   walau tool-nya terpanggil benar). **Isu keempat SUDAH diperbaiki:** root
+   regresi penuh 104-kasus (0 error baru) -- awalnya tiga isu diketahui
+   ~~BELUM diperbaiki~~: regresi routing PR04 (1/104, salah rute pertanyaan
+   harga berkata "kategori") **-- SUDAH DIPERBAIKI (sesi lanjutan)**, regresi
+   latensi yang ternyata suite-wide (total suite +318%, median per-kasus
+   +218%, 100/104 kasus melambat -- bukan cuma kasus compound seperti draf
+   awal temuan ini; akar masalah BUKAN `context_cache_config` -- investigasi
+   lanjutan membuktikan itu no-op untuk stack Ollama, lihat bagian 5 poin 2
+   -- **masih TERBUKA, belum dicoba kandidat perbaikannya**), dan dropout
+   sintesis cross-sell di CP01 (1 dari 4 sampel independen menyebut nol
+   kandidat cross-sell walau tool-nya terpanggil benar) **-- DIPERBAIKI
+   SEBAGIAN (sesi lanjutan)**: `PRODUK_INSTRUCTION` diperkuat & diverifikasi
+   lewat 2 sampel live, tapi satu gap terpisah (model kadang menggeneralisasi
+   nama produk saat memanggil tool cross-sell, bikin pencarian semantiknya
+   gagal) masih belum diperbaiki. **Isu keempat SUDAH diperbaiki:** root
    melewati delegasi sama sekali untuk permintaan bergaya "buatkan
    rekomendasi promo" (ditemukan lewat pengujian interaktif pengguna,
    bukan dari 104 kasus regresi) -- lihat bagian 5 di atas untuk detail
-   lengkap keempat isu ini.
+   lengkap keempat isu ini. **Ringkasan status per fix-wave terakhir (bagian
+   6): dari 4 isu, 3 sudah diperbaiki penuh/sebagian, 1 (regresi latensi)
+   masih terbuka.**
 7. **Context (memori semantik lintas-sesi)** -- **ditunda, keputusan
    sadar**: kanari ukuran sesi (`_warn_if_session_growing()`) dipasang
    sebagai langkah pertama untuk risiko context-window yang lebih nyata;
@@ -957,11 +1160,11 @@ cukup dipasang di `ask()` yang sudah ada.
    `root_agent` jadi router + spesialis) belum ditulis ke kode.~~
    **Selesai** -- `root_agent` router + `kategori_specialist` +
    `produk_specialist` sudah di `query.py`, diverifikasi lewat smoke test
-   live dan regresi 104-kasus, lihat bagian 5 untuk detail DAN tiga isu
-   diketahui yang masih belum diperbaiki (regresi routing PR04, regresi
-   latensi suite-wide, dropout sintesis cross-sell CP01) plus satu isu
-   keempat ditemukan pasca-implementasi dan sudah diperbaiki (root
-   melewati delegasi untuk framing "rekomendasi promo").
+   live dan regresi 104-kasus, lihat bagian 5 untuk detail dan status
+   terkini per isu (PR04 sudah diperbaiki, dropout CP01 diperbaiki
+   sebagian, regresi latensi suite-wide masih terbuka -- lihat juga bagian
+   6) plus satu isu keempat ditemukan pasca-implementasi dan sudah
+   diperbaiki (root melewati delegasi untuk framing "rekomendasi promo").
 10. ~~**Data & Prompt (upgrade data transaksi v2 + dwibahasa)** -- desain
     disetujui pengguna, kode BELUM ditulis -- `query.py` dan
     `aggregate_sales.py` saat ini RUSAK (masih mengacu path file lama yang
@@ -990,3 +1193,83 @@ cukup dipasang di `ask()` yang sudah ada.
     lihat desain bagian 4 untuk analisis risiko lengkap). Tetap pakai
     google-adk (tidak migrasi ke LangChain/LangGraph -- keputusan sadar,
     lihat desain bagian 1).
+
+---
+
+## 6. Update Review 2026-09-06 -- Fix-Wave Terakhir & Status Verifikasi
+
+Ditulis setelah membandingkan langsung isi dokumen ini terhadap commit
+terbaru di `main` (`git log`) dan terhadap `test_report.jsonl` yang
+sebenarnya (bukan cuma percaya angka lama di dokumen) -- tiga commit
+berikut ada di `main` tapi belum tercermin di bagian 1-5 sebelum revisi ini:
+
+1. **`80057a8` -- PH01 gap (peak-hours tanpa segmen):** kasus tes baru
+   ("jam berapa penjualan paling ramai", tanpa nama segmen) sempat gagal ke
+   jaring pengaman fabrikasi (nol tool dipanggil) padahal seharusnya
+   memanggil `get_peak_hours` dengan segmen kosong (cakup semua data).
+   Akar masalah dua lapis: (a) `PRODUK_INSTRUCTION` poin 5 belum
+   menjelaskan `get_peak_hours` boleh menerima segmen kosong (beda dari
+   poin 3 untuk `get_price_range` yang sudah eksplisit soal ini) --
+   diperbaiki, disamakan. (b) Diuji ulang setelah fix (a): masih flaky (1
+   dari 2 percobaan gagal, kali ini root MENOLAK langsung dengan alasan
+   "tidak ada fungsi untuk analisis penjualan per jam" tanpa mencoba
+   delegasi ke `produk_specialist` sama sekali). **Status jujur: residual
+   -- routing untuk pertanyaan gaya PH01 (tanpa segmen eksplisit) TETAP
+   probabilistik, bukan deterministik**, sama seperti pola "model 8B lokal
+   tidak 100% konsisten ikuti instruksi teks" yang sudah berulang kali
+   didokumentasikan di bagian 5 poin 4. Belum ada jaring pengaman
+   deterministik tambahan untuk pola spesifik ini (beda dari jaring
+   pengaman fabrikasi di `verify_and_revise` yang menangani KONTEN jawaban,
+   bukan KEPUTUSAN routing itu sendiri).
+2. **`129e1cb` -- tutup 4 gap dari final review:**
+   - `_DATA_TOOL_NAMES` (dipakai `_extract_session_tool_numbers` untuk
+     jaring pengaman fabrikasi, lihat bagian 5 poin 4) sempat KEHILANGAN 3
+     tool yang ditambah branch ini (`get_peak_hours`,
+     `get_trending_products`, `get_trending_categories`) -- regresi diam-diam
+     yang MENGHIDUPKAN KEMBALI bug false-positive yang sudah pernah
+     diperbaiki di `dc612d8` (bagian 5 poin 4), khusus untuk angka dari
+     riwayat sesi hasil 3 tool baru itu. Diperbaiki: ketiganya ditambahkan
+     ke daftar.
+   - Pesan fallback nol-tool di `_verify_and_revise_impl` (bagian 5 poin 4)
+     diperbaiki supaya menyebut rentang tanggal yang BENAR-BENAR tersedia
+     secara dinamis (bukan pesan generik), dan berhenti menyiratkan
+     "coba tanya lebih eksplisit" SELALU menolong -- menyesatkan untuk
+     penolakan per-pelanggan/luar-rentang-tanggal yang memang tidak bisa
+     dijawab dari data yang ada, bukan soal cara bertanya.
+   - `_build_root_instruction` diperketat untuk istilah waktu relatif
+     ("minggu ini"/"bulan lalu"/"hari ini" vs "tahun lalu") supaya model
+     lebih terarah menolak di awal daripada menulis draft yang baru
+     ditangkap jaring pengaman belakangan.
+   - `_available_date_range_note`/`_filter_by_date`: optimasi performa --
+     berhenti membangun ulang `Series.dt.date` di seluruh dataset ~3 juta
+     baris berulang kali, sekali hitung pakai `Series.min().max().date()`
+     langsung (~85x dan ~2.2x lebih cepat, diukur independen). Ini
+     mengurangi (tapi lihat poin 3 di bawah: TIDAK menghilangkan) kontributor
+     regresi latensi suite-wide di bagian 5 poin 2 -- optimasi ini soal
+     biaya pandas per tool call, bukan soal jumlah panggilan LLM penuh yang
+     tetap jadi akar masalah dominan.
+3. **`ee79213` -- regresi live final, 117 kasus:** re-run penuh
+   `test_agent_cases.py` (117 kasus/120 giliran, mencakup kasus baru
+   trending/peak-hours/filter-tanggal/drift-bahasa yang ditambah branch
+   ini) setelah SEMUA fix di atas -- **0 error, 11 tool-mismatch yang sama
+   seperti run sebelumnya (sudah diverifikasi ulang, bukan regresi baru)**.
+   Ini angka yang benar-benar berlaku SEKARANG untuk `test_agent_cases.py`
+   -- bedakan dari angka "104 kasus" di bagian 1-5 yang tetap dipertahankan
+   apa adanya karena merujuk ke benchmark/perbandingan SPESIFIK yang
+   memang dijalankan dengan 104 kasus pada waktunya (mis. perbandingan
+   `compare_migration_report.py` terhadap `test_report_pre_migration.jsonl`
+   yang juga 104 kasus) -- mengubah angka itu jadi "117" akan MERUSAK
+   keakuratan historisnya, bukan memperbaikinya.
+
+**Yang TIDAK berubah dari review ini (dicek, tetap valid):** definisi tool
+per spesialis (bagian 5, tabel routing final), keputusan hybrid
+`verify_and_revise` (bagian 5 #Bagian 2), dan kesimpulan bahwa
+`context_cache_config` adalah no-op untuk stack `ollama_chat` -- semua
+dikonfirmasi ulang langsung terhadap `query.py` saat ini (lihat diagram
+bagian 0, digambar dari kode yang sama).
+
+**Temuan tambahan yang BUKAN soal kode, tapi soal operasional:** lihat
+peringatan di awal dokumen ini -- proses `python query.py` yang sedang
+berjalan di mesin ini per saat review ditulis TIDAK menjalankan kode yang
+dijelaskan bagian 6 ini (atau bahkan sebagian besar bagian 1-5), karena
+jalan dari git worktree lain yang ketinggalan sebelum migrasi data v2.
