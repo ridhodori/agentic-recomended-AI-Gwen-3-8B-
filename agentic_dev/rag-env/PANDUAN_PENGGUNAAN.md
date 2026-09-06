@@ -129,19 +129,19 @@ konsisten dipakai di setiap panggilan (harus sama sepanjang satu proses
   harus bilang tidak ketemu, bukan mengarang produk.
 - Ketik kosong lalu Enter -> tidak boleh crash (langsung minta input lagi).
 
-### 6. Uji regresi otomatis (104 kasus)
+### 6. Uji regresi otomatis (117 kasus)
 
 ```powershell
 .\Scripts\python.exe test_agent_cases.py
 ```
 
-Menjalankan 104 kasus / 107 giliran terhadap `root_agent` yang sama dengan
+Menjalankan 117 kasus / 120 giliran terhadap `root_agent` yang sama dengan
 `query.py` (pakai `InMemorySessionService` supaya tidak tercampur riwayat
 sesi asli), mencakup ketujuh tool, kasus edge (penolakan tema waktu/pelanggan,
 segmen di luar katalog, input tidak bermakna), multi-turn, dan pertanyaan
 gabungan yang butuh beberapa tool sekaligus. Hasil ditulis progresif ke
 `test_report.jsonl` (satu JSON per kasus) -- jalan sekitar 25-30 menit untuk
-104 kasus. Cek tool yang benar-benar terpanggil vs. yang diharapkan, dan baca
+117 kasus. Cek tool yang benar-benar terpanggil vs. yang diharapkan, dan baca
 `answer` tiap giliran untuk menilai apakah jawabannya masuk akal (nama tool
 yang beda dari ekspektasi belum tentu salah -- baca dulu jawabannya sebelum
 menyimpulkan bug, lihat catatan di `rag-setup-windows.md` bagian Known Issues
@@ -178,5 +178,5 @@ kategori itu.
 - [`aggregate_sales.py`](aggregate_sales.py) -- agregasi popularitas
 - [`build_index.py`](build_index.py) -- indexer ChromaDB
 - [`query.py`](query.py) -- agen (jalankan ini untuk pakai)
-- [`test_agent_cases.py`](test_agent_cases.py) -- 104 kasus uji regresi terhadap `root_agent`
+- [`test_agent_cases.py`](test_agent_cases.py) -- 117 kasus uji regresi terhadap `root_agent`
 - [`rag-setup-windows.md`](rag-setup-windows.md) -- setup, arsitektur, troubleshooting teknis

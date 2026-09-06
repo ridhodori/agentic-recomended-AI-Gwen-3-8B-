@@ -135,9 +135,9 @@ sebelumnya.
   `_transactions_cache` (lazy-load seluruh `transaction_data/transaction_day*.csv`
   yang cocok pola glob, ~3 juta baris gabungan sejak `transaction_time`/
   `item_qty` ditambahkan -- lihat `2026-09-06-transaction-data-v2-design.md`,
-  desain disetujui, kode belum ditulis -- dulu satu file ~1.5 juta baris
-  tanpa kolom waktu/kuantitas) -- dipakai langsung sebagai sumber query
-  pandas di semua tool lainnya.
+  sudah diimplementasikan -- dulu satu file ~1.5 juta baris tanpa kolom
+  waktu/kuantitas) -- dipakai langsung sebagai sumber query pandas di semua
+  tool lainnya.
 - **Riwayat percakapan (session state):** `InMemorySessionService` +
   `SESSION_ID`/`USER_ID` tetap -- context antar-giliran dalam satu proses
   `query.py` yang sama terjaga (ini alasan migrasi ke ADK).
@@ -168,11 +168,11 @@ sebelumnya.
   (`transaction_data/transaction_day*.csv` tidak punya `user_id`) -- ini
   batasan data, bukan arsitektur, jadi tidak ada tool yang bisa menutupinya.
 - ~~**Context temporal:** tidak ada kolom timestamp -- sama, batasan
-  data.~~ **REVISI:** `transaction_time` sudah ada di data sejak
-  `2026-09-06-transaction-data-v2-design.md` (desain disetujui, kode belum
-  ditulis) -- context temporal sekarang bisa dibangun (filter tanggal,
-  trending antar hari, jam ramai), dibatasi oleh rentang tanggal yang
-  benar-benar ter-load, bukan lagi tidak mungkin sama sekali.
+  data.~~ **Selesai:** `transaction_time` sudah ada di data sejak
+  `2026-09-06-transaction-data-v2-design.md` (sudah diimplementasikan) --
+  context temporal sekarang bisa dibangun (filter tanggal, trending antar
+  hari, jam ramai), dibatasi oleh rentang tanggal yang benar-benar ter-load,
+  bukan lagi tidak mungkin sama sekali.
 
 **Saran tool:**
 - **Memori semantik lintas-sesi (kalau desain multi-sesi di atas dipilih):**
@@ -962,14 +962,16 @@ cukup dipasang di `ask()` yang sudah ada.
    latensi suite-wide, dropout sintesis cross-sell CP01) plus satu isu
    keempat ditemukan pasca-implementasi dan sudah diperbaiki (root
    melewati delegasi untuk framing "rekomendasi promo").
-10. **Data & Prompt (upgrade data transaksi v2 + dwibahasa)** -- **desain
-    disetujui pengguna, kode BELUM ditulis** -- lihat
-    `2026-09-06-transaction-data-v2-design.md` untuk spec lengkap. Ringkasan:
-    sumber data transaksi berubah dari satu file tanpa timestamp jadi
-    beberapa file harian (`transaction_data/transaction_day*.csv`) dengan
-    kolom baru `transaction_time` dan `item_qty` -- `query.py` dan
+10. ~~**Data & Prompt (upgrade data transaksi v2 + dwibahasa)** -- desain
+    disetujui pengguna, kode BELUM ditulis -- `query.py` dan
     `aggregate_sales.py` saat ini RUSAK (masih mengacu path file lama yang
-    sudah tidak ada) sampai desain ini diimplementasikan. Cakupan: (a)
+    sudah tidak ada) sampai desain ini diimplementasikan.~~ **Selesai** --
+    sudah diimplementasikan dan diverifikasi lewat regresi live 117-kasus
+    (`test_report.jsonl`), lihat `2026-09-06-transaction-data-v2-design.md`
+    untuk spec lengkap. Ringkasan: sumber data transaksi berubah dari satu
+    file tanpa timestamp jadi beberapa file harian
+    (`transaction_data/transaction_day*.csv`) dengan kolom baru
+    `transaction_time` dan `item_qty`. Cakupan: (a)
     "terjual" ganti dari hitung baris jadi net qty (`sum(item_qty)`,
     retur/`item_qty` negatif mengurangi angka), (b) filter tanggal opsional
     di `get_top_sellers`/`get_top_categories`, (c) tool baru
