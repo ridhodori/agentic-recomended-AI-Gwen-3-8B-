@@ -281,9 +281,11 @@ async def get_top_sellers(
 ) -> str:
     """
     Find best-selling products from raw transaction data, optionally filtered by
-    segment. Returns ONE combined ranking for the whole date range -- if the
-    request wants a separate ranking PER DAY (e.g. "top N terlaris per hari"),
-    use get_top_sellers_by_day instead.
+    segment. Returns ONE combined ranking for the whole date range -- this is the
+    right tool for a plain date or date-RANGE question (a range by itself is NOT
+    a reason to use get_top_sellers_by_day; only switch to that tool when the
+    request has an explicit per-day signal such as "per hari"/"tiap hari"/
+    "setiap hari"/"harian", not merely because it spans multiple days).
 
     Args:
       segment: Product/category keyword to filter by, e.g. "sabun mandi" or "minuman".
@@ -334,11 +336,15 @@ async def get_top_sellers_by_day(
 ) -> str:
     """
     Find best-selling products from raw transaction data, broken down into a
-    SEPARATE ranking for EACH calendar day in the range -- use this instead of
-    get_top_sellers whenever the request explicitly asks for a PER-DAY
-    breakdown (e.g. "top N terlaris per hari/tiap hari/setiap hari" or names
-    more than one specific date), since a single combined ranking across
-    multiple days can hide which product actually led on each individual day.
+    SEPARATE ranking for EACH calendar day in the range. Use this ONLY when the
+    request contains an explicit per-day signal -- "per hari"/"tiap hari"/
+    "setiap hari"/"harian"/"masing-masing hari", or 3+ individual dates listed
+    one by one -- NOT merely because the request spans a multi-day range (a
+    plain "from X to Y" range with no such signal should use get_top_sellers
+    instead, which already handles ranges correctly in one combined ranking). A
+    combined ranking across multiple days can hide which product actually led
+    on each individual day, which is why this tool exists for when a per-day
+    breakdown was genuinely asked for.
 
     Args:
       segment: Product/category keyword to filter by, e.g. "sabun mandi" or "minuman".
@@ -793,10 +799,20 @@ history needed) from the router -- answer directly based on that request.
 Your job, pick the tool that matches the request type:
 1. Categories in general (not a specific segment/product) -- "which category
    sells the most" / "which category sells the least" -> get_top_categories
-   (terendah=True for the least-selling).
+   (terendah=True for the least-selling). This includes comparing two or more
+   NAMED categories (e.g. "which sells more, Makanan or Minuman") -- there is
+   no separate "compare categories" tool, get_top_categories has no segment
+   filter at all, it always ranks every category; call it with a top_n large
+   enough to include the named categories, then read off just the ones asked
+   about from the result.
 2. A specific date or date range -> pass start_date/end_date (YYYY-MM-DD) to
    get_top_categories; leave both empty ("") to use every available date
-   (the default -- not a special case).
+   (the default -- not a special case). This combines freely with rule #1 --
+   a comparison between named categories restricted to a specific date is
+   STILL just get_top_categories with both the date filter AND enough top_n
+   to cover the named categories in one call. Never refuse a comparison
+   request just because it also names a date that falls inside
+   {date_range} -- that is not a missing capability.
 3. Categories with the least/most product variety in the catalog (assortment
    gap) -> get_category_assortment.
 4. Trending categories (biggest growth between the two most recent dates in
@@ -836,25 +852,38 @@ Your job, pick the tool that matches the request type:
    terlaris" request that does not name any product/category, this is a
    normal request, not an error. Pass start_date/end_date (YYYY-MM-DD) if the
    request names a specific date or date range; leave both empty ("") to use
-   every available date (the default -- not a special case). If the request
-   explicitly wants a breakdown PER DAY (e.g. "per hari", "tiap hari",
-   "setiap hari", or names more than one specific date) instead of one
-   combined ranking for the whole range, use get_top_sellers_by_day instead --
-   a single ranking collapsed across multiple days can hide which product
-   actually led on each individual day, so never substitute get_top_sellers
-   with a wide start_date/end_date range when a per-day breakdown was asked
-   for.
-2. Least-selling / never-sold products, candidates for discontinuation or a
+   every available date (the default -- not a special case). IMPORTANT: a
+   DATE RANGE BY ITSELF (e.g. "dari tanggal X sampai Y", "antara X dan Y",
+   "periode X-Y") is NOT a reason to use get_top_sellers_by_day -- passing
+   start_date/end_date to THIS tool already covers the whole range correctly
+   in ONE combined ranking, which is the right answer for a plain range
+   question. Only move to rule #2 below when one of ITS specific trigger
+   phrases is present -- do not treat "spans multiple days" by itself as
+   that trigger.
+2. A request for a PER-DAY BREAKDOWN of best-selling products (a separate
+   ranking for EACH day, not one combined ranking) -> get_top_sellers_by_day
+   instead of get_top_sellers. Use this tool ONLY when the request contains
+   one of these explicit signals -- if NONE of them is present, always use
+   get_top_sellers instead, even if the request spans a multi-day range:
+     - "per hari", "tiap hari", "setiap hari", "harian", "per day"
+     - "masing-masing hari", "dipisah per hari", "breakdown ... hari"
+     - 3+ individual dates listed one by one (e.g. "tanggal A, B, dan C"),
+       as opposed to a single from/to range phrase
+   A single combined ranking collapsed across multiple days can hide which
+   product actually led on each individual day, so once one of the signals
+   above IS present, always use get_top_sellers_by_day -- never substitute
+   get_top_sellers with a wide start_date/end_date range instead.
+3. Least-selling / never-sold products, candidates for discontinuation or a
    price cut -> get_worst_sellers.
-3. Price range (cheapest/most expensive/median) for a segment or category ->
+4. Price range (cheapest/most expensive/median) for a segment or category ->
    get_price_range (leave segment empty for the whole catalog's price range).
-4. Trending products (biggest growth between the two most recent dates in the
+5. Trending products (biggest growth between the two most recent dates in the
    data, e.g. "which product is trending/picking up now") ->
    get_trending_products.
-5. Busiest selling hours (for staffing/promo-timing questions, e.g. "what
+6. Busiest selling hours (for staffing/promo-timing questions, e.g. "what
    time of day sells the most") -> get_peak_hours (leave segment empty for
    peak hours across the whole dataset, not just one product/category).
-6. If the request mentions "products similar/comparable to [X]" -- WHATEVER
+7. If the request mentions "products similar/comparable to [X]" -- WHATEVER
    qualifier is attached (e.g. "with low sales", "that sell better", "for
    cross-selling") -- use find_cross_sell_candidates with product_name=X. If
    X is not yet a concrete product name (e.g. the request still names a
@@ -868,7 +897,7 @@ Your job, pick the tool that matches the request type:
    product itself as its own cross-sell candidate. If this tool genuinely
    returns no candidates, say so plainly ("no suitable cross-sell candidates
    found") -- never make one up or substitute the reference product itself.
-7. Use search_catalog when you need extra detail about a specific product.
+8. Use search_catalog when you need extra detail about a specific product.
 
 If a request asks for SEVERAL things at once (e.g. best-seller AND its price
 range AND a cross-sell recommendation), make sure your final answer actually
@@ -1002,6 +1031,44 @@ def _extract_numbers(text: str) -> set[str]:
     return {n.replace(".", "").replace(",", "") for n in _NUM_RE.findall(text)}
 
 
+# Kanari murah (observability only, TIDAK mengubah jawaban) untuk kasus yang
+# ditemukan lewat pengujian 200-kasus (2026-09-06): pertanyaan yang eksplisit
+# minta breakdown per hari kadang tetap dijawab pakai get_top_sellers (satu
+# ranking gabungan) alih-alih get_top_sellers_by_day, meski PRODUK_INSTRUCTION
+# sudah diperjelas jadi aturan berbasis kata kunci murni -- sisa miss-rate
+# ini kemungkinan besar variabilitas model 8B lokal yang probabilistik (bukan
+# lagi ambiguitas instruksi seperti sebelumnya), jadi didokumentasikan lewat
+# log di sini dulu (pola yang sama seperti _warn_if_session_growing) alih-alih
+# langsung membangun mekanisme auto-retry yang lebih kompleks tanpa bukti
+# seberapa sering ini benar-benar terjadi di pemakaian nyata.
+_PER_DAY_SIGNAL_RE = re.compile(
+    r"\bper\s*hari\b|\btiap\s*hari\b|\bsetiap\s*hari\b|\bharian\b|\bper\s*day\b|"
+    r"\bmasing-masing\s*hari\b|\bdipisah\s*per\s*hari\b",
+    re.IGNORECASE,
+)
+# Header tanggal ("2026-08-01:") cuma muncul di format keluaran
+# get_top_sellers_by_day (lihat _get_top_sellers_by_day_impl) -- absennya pola
+# ini di tool_outputs padahal pertanyaan menyebut sinyal per-hari di atas
+# adalah tanda kuat get_top_sellers (bukan get_top_sellers_by_day) yang
+# terpanggil untuk permintaan yang harusnya di-breakdown per tanggal.
+_DAY_HEADER_RE = re.compile(r"^\d{4}-\d{2}-\d{2}:\s*$", re.MULTILINE)
+
+
+def _log_possible_per_day_miss(question: str, tool_outputs: str) -> None:
+    if not tool_outputs.strip():
+        return  # nol tool dipanggil -- kemungkinan penolakan sah, bukan cakupan kanari ini
+    if _PER_DAY_SIGNAL_RE.search(question) and not _DAY_HEADER_RE.search(tool_outputs):
+        with open(TOOL_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(
+                f"NOTE {datetime.now().isoformat(timespec='seconds')} | verify_and_revise | "
+                f"KEMUNGKINAN PER-HARI MISS -- pertanyaan menyebut sinyal per-hari "
+                f"('per hari'/'tiap hari'/'setiap hari'/dst.) tapi tool_outputs giliran ini "
+                f"tidak berisi header tanggal (format get_top_sellers_by_day) -- kemungkinan "
+                f"get_top_sellers (ranking gabungan) terpanggil padahal breakdown per hari diminta. "
+                f"question={question!r}\n"
+            )
+
+
 # Ambang jumlah angka konkret "asing" (bukan dari pertanyaan pengguna) yang
 # dianggap mencurigakan kalau NOL tool dipanggil giliran ini -- penolakan sah
 # (tema waktu/per-pelanggan) tidak pernah menyebut angka spesifik sama
@@ -1112,6 +1179,8 @@ def _verify_and_revise_impl(
     draft tidak punya angka verifiable sama sekali (klaim kualitatif, mis.
     "cocok untuk cross-sell", yang tidak bisa dicek programatik).
     """
+    _log_possible_per_day_miss(question, tool_outputs)
+
     if not tool_outputs.strip():
         # Nol tool dipanggil giliran ini -- BISA berarti penolakan sah (tema
         # waktu/per-pelanggan, root ATAU spesialis menolak tanpa data, lihat
